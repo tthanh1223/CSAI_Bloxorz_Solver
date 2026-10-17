@@ -2,7 +2,7 @@
 
 Project for rebuilding Bloxorz with a playable GUI and search algorithms
 (BFS, DFS/IDS, UCS, and A*).
-
+hello
 ## Setup
 
 Create and activate a project-local virtual environment from the repository root.
