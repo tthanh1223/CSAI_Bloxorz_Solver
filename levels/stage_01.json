@@ -1,0 +1,11 @@
+{
+  "grid": [
+    ["S", "1", "1"],
+    ["0", "1", "G"]
+  ],
+  "start_coord": [0, 0],
+  "goal_coord": [1, 2],
+  "switches": [],
+  "bridges": {},
+  "initial_bridge_mask": []
+}
