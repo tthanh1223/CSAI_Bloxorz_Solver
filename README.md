@@ -26,13 +26,13 @@ python -m pip install -r requirements.txt
 ## Run
 
 ```powershell
-python main.py
+python main_test.py
 ```
 
 The GUI dependency is `pygame-ce`; it provides the `pygame` import used by the
-application. The project is currently a scaffold. Engine loading, game
-mechanics, solvers, benchmarking, and the GUI still need implementation, so
-the run command is not functional yet.
+application. This opens the basic 2D GUI for testing gameplay. It starts with
+stage 01; press Enter after winning to continue through stages 02 and 03. The
+GUI is a simple test view, not the finished game presentation.
 
 ## Project layout
 
