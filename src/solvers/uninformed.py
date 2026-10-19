@@ -80,7 +80,7 @@ class DFS(SearchSolver):
                                 g=node.g + cost,
                             )
                             stack.append((child, path_states | {next_state}))
-            return False, [], 0, 0.0
+            return False, [], expanded_nodes, 0.0
         return run_with_profiler(_ids)
 
 import heapq
