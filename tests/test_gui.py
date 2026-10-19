@@ -1,0 +1,432 @@
+﻿import os
+os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+os.environ.setdefault('SDL_AUDIODRIVER', 'dummy')
+from pathlib import Path
+from time import monotonic, sleep
+import pygame
+import pytest
+from src.engine.loader import load_stage
+from src.engine.problem import BloxorzProblem, GameSession
+from src.engine.state import Action, GameState, Orientation
+from src.gui.app import BloxorzApp, initial_state
+from src.gui.contracts import MotionFrame, ReplayStatus, SolverRequest, SolverStatus, SolverResponse, SolverResultView
+from src.gui.renderer3d import state_meshes, motion_meshes, IsometricRenderer
+from src.gui.animation import RollAnimation
+from src.gui.replay import PathReplay
+from src.gui.solver_gateway import ProcessSolverGateway
+from src.solvers.uninformed import BFS
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class FakeGateway:
+    def __init__(self): self.response = None
+    def submit(self, request): self.request = request
+    def cancel(self, request_id): pass
+    def poll(self):
+        result, self.response = self.response, None
+        return result
+    def close(self): pass
+
+
+def app_fixture():
+    paths = sorted((ROOT / 'levels').glob('stage_*.json'))
+    stage = load_stage(str(paths[0]))
+    app = BloxorzApp(GameSession(BloxorzProblem(stage, initial_state(stage))), paths, FakeGateway())
+    return app
+
+
+def test_render_cache_invalidation_and_animation_reuse():
+    pygame.init()
+    app=app_fixture()
+    renderer=app.renderer
+    surface=pygame.Surface((820,630),pygame.SRCALPHA)
+    before=app.session.current_state
+    action,after,_=app.session.problem.get_successors(before)[0]
+    renderer.draw(surface,before)
+    builds=renderer.stats['static_builds']
+    for progress in (.1,.25,.5,.75,.99):
+        renderer.draw(surface,after,MotionFrame(before,after,action,progress))
+    assert renderer.stats['static_builds']==builds
+    renderer.draw(surface,after)
+    renderer.draw(surface,after)
+    assert renderer.stats['frame_cache_hits']>0
+    renderer.zoom=1.2
+    renderer.draw(surface,after)
+    assert renderer.stats['static_builds']==builds+1
+    renderer.high_contrast=True
+    renderer.draw(surface,after)
+    assert renderer.stats['static_builds']==builds+2
+    renderer.set_stage(app.stage)
+    renderer.draw(surface,after)
+    assert renderer.stats['static_builds']==builds+3
+    pygame.quit()
+
+
+def test_cached_ui_motion_matches_full_composition():
+    from src.gui.presentation import _draw
+    pygame.init()
+    app=app_fixture()
+    app.screen=pygame.display.set_mode((1180,800))
+    before=app.session.current_state
+    action,after,_=app.session.problem.get_successors(before)[0]
+    app.animation.busy=True
+    app.animation.frame=MotionFrame(before,after,action,.2)
+    app.draw()
+    app.animation.frame=MotionFrame(before,after,action,.7)
+    app.draw()
+    cached=pygame.image.tobytes(app.screen,'RGB')
+    _draw(app)
+    assert pygame.image.tobytes(app.screen,'RGB')==cached
+    assert app.draw() is False
+    pygame.quit()
+
+
+def test_one_buffered_move_obeys_engine_and_restart_clears_it():
+    app=app_fixture()
+    assert app.apply_action(Action.RIGHT)
+    accepted=app.session.current_state
+    app.handle_key(pygame.K_DOWN)
+    assert app.session.current_state==accepted
+    expected=GameSession(BloxorzProblem(app.stage,accepted))
+    expected.apply_action(Action.DOWN)
+    app.update(.5)
+    assert app.session.current_state==expected.current_state
+    assert app.pending_action is None
+    app.pending_action=Action.LEFT
+    app.restart()
+    assert app.pending_action is None
+
+
+def test_bridge_cache_and_split_rendering():
+    from dataclasses import replace
+    from src.engine.loader import StageData,TileType
+    pygame.init()
+    stage=StageData()
+    stage.grid=[[TileType.FLOOR]*6 for _ in range(6)]
+    stage.goal=(5,5)
+    stage.bridges={'gate':[(2,2)]}
+    state=GameState((1,1),(4,4),Orientation.SPLIT,0,(False,))
+    renderer=IsometricRenderer();renderer.set_stage(stage)
+    surface=pygame.Surface((640,480),pygame.SRCALPHA)
+    renderer.draw(surface,state)
+    off=pygame.image.tobytes(surface,'RGBA')
+    renderer.draw(surface,replace(state,bridges_status=(True,)))
+    assert renderer.stats['static_builds']==2
+    assert pygame.image.tobytes(surface,'RGBA')!=off
+    active=replace(state,active_cube=1,bridges_status=(True,))
+    renderer.draw(surface,active)
+    assert renderer.stats['static_builds']==2
+    pygame.quit()
+
+
+def solution(app):
+    return tuple(Action(a) for a in BFS().solve(app.session.problem).path)
+
+
+@pytest.mark.parametrize('name',['dream','blueprint','forest'])
+def test_theme_switch_keeps_state_and_cached_animation(name):
+    from src.gui.themes import apply_theme
+    from src.gui.presentation import _draw
+    pygame.init()
+    app=app_fixture()
+    app.screen=pygame.display.set_mode((1180,800))
+    before=app.session.current_state
+    try:
+        apply_theme(app,name)
+        app.draw()
+        assert app.session.current_state==before
+        assert {'theme','solve','undo','restart','hint'} <= {b.key for b in app.buttons}
+        action,after,_=app.session.problem.get_successors(before)[0]
+        app.animation.busy=True
+        app.animation.frame=MotionFrame(before,after,action,.2)
+        app.draw()
+        builds=app.renderer.stats['static_builds']
+        app.animation.frame=MotionFrame(before,after,action,.7)
+        app.draw()
+        cached=pygame.image.tobytes(app.screen,'RGB')
+        _draw(app)
+        assert pygame.image.tobytes(app.screen,'RGB')==cached
+        assert app.renderer.stats['static_builds']==builds
+        app.command('theme')
+        assert app.session.current_state==before
+        assert app.theme_name!=name
+    finally:
+        apply_theme(app,'dream')
+        pygame.quit()
+
+
+def test_bevel_template_winding_is_consistent():
+    from src.gui.renderer3d import _bevel_template
+    points,faces=_bevel_template(.035)
+    for face in faces:
+        a,b,c=(points[i] for i in face[:3])
+        u=[b[k]-a[k] for k in range(3)];v=[c[k]-a[k] for k in range(3)]
+        n=(u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0])
+        center=[sum(points[i][k] for i in face)/len(face)-.5 for k in range(3)]
+        assert sum(n[k]*center[k] for k in range(3))<0
+
+
+def test_champagne_lighting_and_uniform_short_edge_bevel():
+    from src.gui.renderer3d import cuboid,bevel_mesh
+    renderer=IsometricRenderer()
+    corners=cuboid(0,0,0,1,1,2)
+    points,_=bevel_mesh(corners,.04,uniform=True)
+    assert sorted(set(round(p[2],5) for p in points))==[0,.04,1.96,2]
+    colors=[color for _,_,color,_ in renderer._faces(corners,(205,181,137),player=True)]
+    values=[sum(color)/3 for color in colors]
+    assert len(values)==3
+    assert values[0]==max(values)  # top is the first visible main face
+    assert max(values)>min(values)*1.3
+    assert all(color[0]/max(1,color[1])<1.4 for color in colors)
+
+
+@pytest.mark.parametrize('orientation,p2', [(Orientation.STANDING, (5, 5)),
+    (Orientation.LYING_H, (5, 6)), (Orientation.LYING_V, (6, 5))])
+@pytest.mark.parametrize('action', [Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT])
+def test_roll_geometry_matches_engine(orientation, p2, action):
+    before = GameState((5, 5), p2, orientation, 0, ())
+    after = BloxorzProblem.roll_block(before, action)
+    actual = motion_meshes(MotionFrame(before, after, action, 1))[0][0]
+    expected = state_meshes(after)[0][0]
+    assert sorted(tuple(round(c, 6) for c in p) for p in actual) == sorted(expected)
+
+
+def test_animation_time_reset_and_overlap():
+    app = app_fixture()
+    before = app.session.current_state
+    action, after, _ = app.session.problem.get_successors(before)[0]
+    animation = RollAnimation(.2)
+    animation.start(before, after, action)
+    with pytest.raises(RuntimeError): animation.start(before, after, action)
+    animation.update(.1)
+    assert animation.frame.progress == pytest.approx(.5)
+    animation.update(.1)
+    assert not animation.busy and animation.frame is None
+
+
+def test_replay_cursor_and_copy():
+    replay = PathReplay()
+    state = app_fixture().session.current_state
+    path = [Action.RIGHT, Action.DOWN]
+    replay.load(state, path)
+    path.clear()
+    replay.play()
+    replay.pause()
+    assert replay.step() == Action.RIGHT and replay.status == ReplayStatus.PAUSED
+    assert replay.step() == Action.DOWN and replay.status == ReplayStatus.FINISHED
+    assert replay.step() is None
+    replay.load(state, [])
+    assert replay.status == ReplayStatus.FINISHED
+
+
+def test_solve_replay_seek_stop_save_load(tmp_path):
+    app = app_fixture()
+    path = solution(app)
+    app.load_replay(app.session.current_state, path)
+    app.replay.play()
+    for _ in range(1000):
+        app.update(.1)
+        if app.replay.status == ReplayStatus.FINISHED and not app.animation.busy: break
+    assert app.session.status == 'WON'
+    assert app.actions == list(path)
+    app.seek(2)
+    assert app.replay.index == 2 and not app.animation.busy
+    save = tmp_path / 'session.json'
+    app.save(save)
+    app.restart()
+    app.load(save)
+    assert app.replay.index == 2 and app.actions == list(path[:2])
+    app.stop_replay()
+    assert app.replay.status == ReplayStatus.EMPTY
+    app.undo()
+    assert app.actions == list(path[:1])
+
+
+def test_stale_solver_result_does_not_replace_stage():
+    app = app_fixture()
+    app.solve()
+    old_id = app.active_request
+    app.select_stage(1)
+    state = app.session.current_state
+    app.gateway.response = SolverResponse(old_id, SolverStatus.SOLVED, SolverResultView('BFS', True))
+    app.update(.1)
+    assert app.result is None and app.stage_index == 1 and app.session.current_state == state
+
+
+def test_invalid_save_and_path_leave_session_untouched(tmp_path):
+    app = app_fixture()
+    original = app.session
+    path = tmp_path / 'bad.json'
+    path.write_text('{"version": 77}')
+    app.load(path)
+    assert app.session is original
+    with pytest.raises(ValueError):
+        app.load_replay(app.session.current_state, [Action.UP] * 30)
+    assert app.session is original
+
+
+def wait_result(gateway, seconds=15):
+    deadline = monotonic() + seconds
+    while monotonic() < deadline:
+        response = gateway.poll()
+        if response is not None: return response
+        sleep(.02)
+    pytest.fail('Worker did not finish')
+
+
+@pytest.mark.parametrize('algorithm', ['BFS', 'IDS', 'UCS', 'ASTAR'])
+def test_real_worker_solution(algorithm):
+    app = app_fixture()
+    gateway = ProcessSolverGateway()
+    try:
+        gateway.submit(SolverRequest(1, algorithm, app.stage, app.session.current_state, 10))
+        response = wait_result(gateway)
+        assert response.status == SolverStatus.SOLVED
+        for action in response.result.path:
+            assert app.session.apply_action(action)
+        assert app.session.status == 'WON'
+    finally: gateway.close()
+    assert not gateway.retired and gateway.process is None
+
+
+def test_worker_timeout_cancel_and_error():
+    app = app_fixture()
+    gateway = ProcessSolverGateway()
+    try:
+        gateway.submit(SolverRequest(1, 'IDS', app.stage, app.session.current_state, .000001))
+        assert wait_result(gateway).status == SolverStatus.TIMEOUT
+        gateway.submit(SolverRequest(2, 'BFS', app.stage, app.session.current_state))
+        gateway.cancel(2)
+        assert wait_result(gateway).status == SolverStatus.CANCELLED
+        gateway.submit(SolverRequest(3, 'unknown', app.stage, app.session.current_state))
+        assert wait_result(gateway).status == SolverStatus.ERROR
+    finally: gateway.close()
+
+
+def test_render_all_stages_and_panel(tmp_path):
+    pygame.init()
+    app = app_fixture()
+    app.screen = pygame.display.set_mode((1180, 800))
+    app.font = pygame.font.Font(None, 28)
+    app.title_font = pygame.font.Font(None, 38)
+    for i in range(len(app.stage_paths)):
+        app.select_stage(i)
+        app.draw()
+        assert app.renderer._faces(state_meshes(app.session.current_state)[0][0], (255, 200, 50))
+        for button in app.buttons:
+            assert app.screen.get_rect().contains(button.rect)
+    app.select_stage(0)
+    app.draw()
+    pygame.image.save(app.screen, str(tmp_path / 'gui_preview.png'))
+    app.command('choose')
+    app.draw()
+    assert any(button.key == 'stage:0' for button in app.buttons)
+    pygame.quit()
+
+
+def test_split_transition_and_space_undo():
+    from src.engine.loader import StageData, TileType
+    from src.engine.switches import SwitchData, SwitchType
+    stage = StageData()
+    stage.grid = [[TileType.FLOOR] * 8 for _ in range(8)]
+    stage.goal = (7, 7)
+    stage.switches[(2, 4)] = SwitchData(SwitchType.SPLIT, target_pos1=(1, 1), target_pos2=(4, 4))
+    before = GameState((2, 2), (2, 3), Orientation.LYING_H, 0, ())
+    app = BloxorzApp(GameSession(BloxorzProblem(stage, before)), gateway=FakeGateway())
+    assert app.apply_action(Action.RIGHT)
+    after = app.session.current_state
+    assert after.orientation == Orientation.SPLIT
+    meshes = motion_meshes(MotionFrame(before, after, Action.RIGHT, 1))
+    assert meshes == state_meshes(after)
+    app.update(1)
+    assert app.apply_action(Action.SPACE)
+    app.update(1)
+    assert app.session.current_state.active_cube == 1
+    assert app.session.moves == 1
+    app.undo()
+    assert app.session.moves == 1 and app.session.current_state.active_cube == 0
+
+
+def test_mouse_keyboard_resize_and_pause():
+    pygame.init()
+    app = app_fixture()
+    app.screen = pygame.display.set_mode((1180, 800))
+    app.font = pygame.font.Font(None, 28)
+    app.title_font = pygame.font.Font(None, 38)
+    path = solution(app)
+    app.load_replay(app.session.current_state, path)
+    app.draw()
+    button = next(b for b in app.buttons if b.key == 'play')
+    app.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=button.rect.center))
+    assert app.replay.status == ReplayStatus.PLAYING
+    app.update(.01)
+    cursor = app.replay.index
+    app.handle_key(pygame.K_p)
+    app.update(1)
+    assert app.replay.index == cursor and not app.animation.busy
+    app.handle_event(pygame.event.Event(pygame.VIDEORESIZE, w=1000, h=800))
+    app.draw()
+    assert all(app.screen.get_rect().contains(b.rect) for b in app.buttons)
+    app.handle_key(pygame.K_r)
+    assert app.replay.status == ReplayStatus.EMPTY and app.session.moves == 0
+    app.handle_key(pygame.K_RIGHT)
+    assert app.animation.busy
+    app.select_stage(1)
+    assert not app.animation.busy and app.session.moves == 0
+    pygame.quit()
+
+
+@pytest.mark.parametrize('size', [(960, 720), (1180, 800), (1440, 900)])
+@pytest.mark.parametrize('large', [False, True])
+def test_redesign_modes_and_layout(size, large):
+    from src.gui import theme
+    pygame.init()
+    app = app_fixture()
+    app.screen = pygame.display.set_mode(size)
+    app.large_text = large
+    path = solution(app)
+    start = app.session.current_state
+    def check():
+        app.draw()
+        for button in app.buttons:
+            assert app.screen.get_rect().contains(button.rect), button.key
+            assert theme.font('body', large).size(button.label)[0] <= button.rect.width - 8, button.label
+        for i, button in enumerate(app.buttons):
+            for other in app.buttons[i + 1:]:
+                assert not button.rect.colliderect(other.rect), (button.key, other.key)
+        return {b.key for b in app.buttons}
+    keys = check()
+    assert {'undo', 'restart', 'hint', 'solve'} <= keys
+    assert not {'save', 'load', 'play', 'step', 'sound'} & keys
+    app.command('algorithm_menu')
+    assert 'algorithm:BFS' in check()
+    app.command('algorithm:BFS')
+    app.command('settings')
+    assert {'save', 'load', 'sound', 'animate', 'camera'} <= check()
+    state = app.session.current_state
+    app.handle_key(pygame.K_RIGHT)
+    assert app.session.current_state == state
+    app.command('close_menu')
+    app.command('help')
+    check()
+    app.command('close_menu')
+    app.command('choose')
+    assert 'stage:0' in check()
+    app.command('close_menu')
+    app.solve()
+    keys = check()
+    assert 'cancel' in keys and 'solve' not in keys
+    app.gateway.response = SolverResponse(app.active_request, SolverStatus.SOLVED,
+        SolverResultView('BFS', True, path))
+    app.update(.01)
+    assert 'solution' in check()
+    app.command('details')
+    check()
+    app.load_replay(start, path)
+    keys = check()
+    assert {'play', 'step', 'back', 'stop', 'speed'} <= keys
+    assert not {'undo', 'restart', 'hint', 'solve'} & keys
+    app.command('stop')
+    assert 'undo' in check()
+    pygame.quit()

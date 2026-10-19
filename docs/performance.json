@@ -1,0 +1,43 @@
+{
+  "theme": "forest",
+  "mode": "dummy SDL CPU-only, no display latency",
+  "size": [
+    1180,
+    800
+  ],
+  "python": "3.13.11",
+  "pygame": "2.5.8",
+  "animated_full_gui": {
+    "mean_ms": 11.588,
+    "p95_ms": 14.85,
+    "max_ms": 18.566,
+    "cpu_render_fps": 86.3,
+    "python_primitive_calls_per_frame": 27.0
+  },
+  "idle_full_gui": {
+    "mean_ms": 0.017,
+    "p95_ms": 0.018,
+    "max_ms": 0.027,
+    "cpu_render_fps": 57784.9,
+    "python_primitive_calls_per_frame": 0.0
+  },
+  "input_handler_ms": {
+    "mean": 0.0052,
+    "max": 0.0656,
+    "note": "synthetic mouse event dispatch only; not physical input-to-photon"
+  },
+  "accepted_move_handler_ms": {
+    "mean": 0.197,
+    "max": 0.3479,
+    "note": "synthetic key event through engine + animation scheduling; excludes device/display latency"
+  },
+  "renderer_stats": {
+    "static_builds": 1,
+    "dynamic_frames": 103,
+    "frame_cache_hits": 0,
+    "cached_layer_bytes": 6622560,
+    "material_cache_bytes": 2097880,
+    "block_texture_bytes": 1605632
+  },
+  "gpu_draw_calls": "not available: Pygame software Surface pipeline; primitive count excludes blits"
+}

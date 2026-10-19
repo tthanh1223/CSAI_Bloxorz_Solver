@@ -41,10 +41,12 @@ def main() -> None:
         action="store_true",
         help="load stage 01 and print its map, then exit",
     )
+    parser.add_argument('--forest', action='store_true', help='optional OpenGL Forest Ruins renderer')
+    parser.add_argument('--theme',choices=('dream','blueprint','forest'),default='dream',help='optimized Pygame visual theme')
     args = parser.parse_args()
 
     levels_dir = Path(__file__).parent / "levels"
-    stage_paths = [levels_dir / f"stage_{number:02}.json" for number in range(1, 4)]
+    stage_paths = sorted(levels_dir.glob("stage_*.json"))
     stage_data = load_stage(str(stage_paths[0]))
     if args.print_map:
         print_stage_map(stage_data)
@@ -64,6 +66,11 @@ def main() -> None:
     problem = BloxorzProblem(stage_data, initial_state)
     session = GameSession(problem)
     app = BloxorzApp(session, stage_paths)
+    from src.gui.themes import apply_theme
+    apply_theme(app,args.theme)
+    if args.forest:
+        from src.gui.forest import enable_forest
+        enable_forest(app)
     app.run()
 
 

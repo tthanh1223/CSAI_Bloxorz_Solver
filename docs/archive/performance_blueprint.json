@@ -1,0 +1,43 @@
+{
+  "theme": "blueprint",
+  "mode": "dummy SDL CPU-only, no display latency",
+  "size": [
+    1180,
+    800
+  ],
+  "python": "3.13.11",
+  "pygame": "2.5.8",
+  "animated_full_gui": {
+    "mean_ms": 8.024,
+    "p95_ms": 8.951,
+    "max_ms": 9.928,
+    "cpu_render_fps": 124.6,
+    "python_primitive_calls_per_frame": 27.0
+  },
+  "idle_full_gui": {
+    "mean_ms": 0.013,
+    "p95_ms": 0.013,
+    "max_ms": 0.022,
+    "cpu_render_fps": 79309.1,
+    "python_primitive_calls_per_frame": 0.0
+  },
+  "input_handler_ms": {
+    "mean": 0.0038,
+    "max": 0.056,
+    "note": "synthetic mouse event dispatch only; not physical input-to-photon"
+  },
+  "accepted_move_handler_ms": {
+    "mean": 0.1426,
+    "max": 0.2437,
+    "note": "synthetic key event through engine + animation scheduling; excludes device/display latency"
+  },
+  "renderer_stats": {
+    "static_builds": 1,
+    "dynamic_frames": 103,
+    "frame_cache_hits": 0,
+    "cached_layer_bytes": 6622560,
+    "material_cache_bytes": 2097880,
+    "block_texture_bytes": 196608
+  },
+  "gpu_draw_calls": "not available: Pygame software Surface pipeline; primitive count excludes blits"
+}

@@ -1,251 +1,529 @@
+"""GUI orchestration: engine is the only source of game rules."""
 from __future__ import annotations
-
-import pygame
+import json
+import math
+from array import array
 from pathlib import Path
-
-from src.engine.loader import StageData, TileType, load_stage
+import pygame
+from src.engine.loader import load_stage
 from src.engine.problem import BloxorzProblem, GameSession
 from src.engine.state import Action, GameState, Orientation
+from src.gui.animation import RollAnimation
+from src.gui.replay import PathReplay
+from src.gui.renderer3d import IsometricRenderer
+from src.gui.solver_gateway import ProcessSolverGateway
+from src.gui.contracts import SolverRequest, SolverStatus, ReplayStatus
+from src.gui import theme
+from src.gui.presentation import draw as draw_presentation
+
+ROOT = Path(__file__).resolve().parents[2]
+SAVE_PATH = ROOT / 'data' / 'gui_session.json'
+
+
+def initial_state(stage):
+    return GameState(stage.start, stage.start, Orientation.STANDING, 0, stage.initial_bridge_mask)
+
+
+def state_dict(state):
+    return dict(pos1=list(state.pos1), pos2=list(state.pos2), orientation=state.orientation.value,
+                active_cube=state.active_cube, bridges_status=list(state.bridges_status))
+
+
+def read_state(data):
+    for name in ('pos1', 'pos2'):
+        if not isinstance(data[name], list) or len(data[name]) != 2 or any(type(x) is not int for x in data[name]):
+            raise ValueError('Invalid coordinates.')
+    if type(data['active_cube']) is not int or any(type(x) is not bool for x in data['bridges_status']):
+        raise ValueError('Invalid state.')
+    state = GameState(tuple(data['pos1']), tuple(data['pos2']), Orientation(data['orientation']),
+                      data['active_cube'], tuple(data['bridges_status']))
+    dr = abs(state.pos1[0] - state.pos2[0])
+    dc = abs(state.pos1[1] - state.pos2[1])
+    valid = {Orientation.STANDING: dr + dc == 0, Orientation.LYING_H: dr == 0 and dc == 1,
+             Orientation.LYING_V: dr == 1 and dc == 0,
+             Orientation.SPLIT: dr + dc >= 1 and state.active_cube in (0, 1)}
+    if not valid[state.orientation]:
+        raise ValueError('Invalid block orientation.')
+    return state
 
 
 class BloxorzApp:
-    """Small keyboard-playable Pygame view for the current stage/session."""
+    WINDOW_SIZE = (1180, 800)
 
-    WINDOW_SIZE = (900, 680)
-    BACKGROUND = (22, 27, 38)
-    PANEL = (31, 38, 52)
-    FLOOR = (72, 87, 108)
-    VOID = (15, 19, 28)
-    GOAL = (45, 170, 123)
-    FRAGILE = (183, 120, 54)
-    BRIDGE_ON = (65, 138, 190)
-    BLOCK = (244, 190, 75)
-    BLOCK_ACTIVE = (255, 220, 110)
-    TEXT = (235, 240, 248)
-    MUTED = (160, 173, 192)
-
-    def __init__(self, session: GameSession, stage_paths: list[Path] | None = None):
+    def __init__(self, session, stage_paths=None, gateway=None):
         self.session = session
-        self.stage: StageData = session.problem.stage_data
-        self.stage_paths = stage_paths or []
+        self.stage = session.problem.stage_data
+        self.stage_paths = list(stage_paths or [])
         self.stage_index = 0
-        self.screen: pygame.Surface | None = None
-        self.font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self._set_board_layout()
-        self.message = "Use arrow keys to roll the block. Z: undo, R: restart."
-        self.message_color = self.MUTED
+        self.renderer = IsometricRenderer()
+        self.renderer.set_stage(self.stage)
+        self.animation = RollAnimation()
+        self.replay = PathReplay()
+        self.gateway = gateway or ProcessSolverGateway()
+        self.record_start = session.current_state
+        self.actions = []
+        self.request_id = 0
+        self.active_request = None
+        self.solve_start = None
+        self.hint_mode = False
+        self.algorithm = 'ASTAR'
+        self.solve_current = True
+        self.solver_status = SolverStatus.IDLE
+        self.result = None
+        self.speed = 1.0
+        self.wait = 0.0
+        self.animate = True
+        self.sound_enabled = False
+        self.high_contrast = False
+        self.large_text = False
+        self.sound = None
+        self.zoom = 1.0
+        self.pan = [0, 0]
+        self.dragging = False
+        self.stage_picker = False
+        self.picker_page = 0
+        self.menu = None
+        self.dropdown_open = False
+        self.details_open = False
+        self.modal_rect = pygame.Rect(0, 0, 0, 0)
+        self.dropdown_rect = pygame.Rect(0, 0, 0, 0)
+        self.message = 'Roll with arrows or WASD. Reach G standing upright.'
+        self.screen = None
+        self.buttons = []
+        self.seek_rect = pygame.Rect(0, 0, 0, 0)
+        self.board_rect = pygame.Rect(0, 0, 1, 1)
+        self.font = self.small_font = self.title_font = None
+        self.pending_action = None
 
-    def _set_board_layout(self) -> None:
-        rows = len(self.stage.grid)
-        cols = max((len(row) for row in self.stage.grid), default=1)
-        self.cell_size = max(28, min(64, 570 // max(rows, cols, 1)))
-        self.board_width = cols * self.cell_size
-        self.board_height = rows * self.cell_size
-        self.board_x = 42
-        self.board_y = max(72, (self.WINDOW_SIZE[1] - self.board_height) // 2)
+    @property
+    def busy(self):
+        return self.active_request is not None
 
-    def run(self) -> None:
+    def invalidate(self):
+        self.pending_action = None
+        if self.active_request is not None:
+            self.gateway.cancel(self.active_request)
+        self.active_request = None
+        self.request_id += 1
+        self.animation.reset()
+        self.replay.reset()
+        self.result = None
+        self.solver_status = SolverStatus.IDLE
+        self.wait = 0
+
+    def new_session(self, state):
+        self.session = GameSession(BloxorzProblem(self.stage, state))
+        if self.session.problem.is_goal(state):
+            self.session.status = 'WON'
+        self.record_start = state
+        self.actions = []
+
+    def select_stage(self, index):
+        if not 0 <= index < len(self.stage_paths):
+            return
+        try:
+            stage = load_stage(str(self.stage_paths[index]))
+        except (ValueError, OSError) as error:
+            self.message = f'Cannot load stage: {error}'
+            return
+        self.invalidate()
+        self.stage, self.stage_index = stage, index
+        self.new_session(initial_state(stage))
+        self.renderer.set_stage(stage)
+        self.zoom, self.pan = 1.0, [0, 0]
+        self.stage_picker = False
+        self.message = 'Stage loaded. Arrow keys / WASD to roll.'
+
+    def restart(self):
+        self.invalidate()
+        self.new_session(initial_state(self.stage))
+        self.message = 'Stage restarted.'
+
+    def apply_action(self, action, replay=False):
+        if self.busy or self.animation.busy:
+            return False
+        if not replay and self.replay.status != ReplayStatus.EMPTY:
+            self.message = 'Exit replay to play manually.'
+            return False
+        before = self.session.current_state
+        if not self.session.apply_action(action):
+            self.message = 'Blocked. Keep the whole block on solid ground.'
+            return False
+        self.actions.append(action)
+        self.session.moves = sum(a != Action.SPACE for a in self.actions)
+        if self.animate:
+            self.animation.duration_sec = 0.18 / self.speed
+            self.animation.start(before, self.session.current_state, action)
+        self.result = self.result if replay else None
+        if not replay:
+            self.solver_status = SolverStatus.IDLE
+        if self.sound_enabled and self.sound:
+            self.sound.play()
+        self.message = 'Rolling...' if self.animation.busy else 'Move accepted.'
+        return True
+
+    def undo(self):
+        if self.busy or self.animation.busy or self.replay.status != ReplayStatus.EMPTY:
+            return
+        if not self.actions:
+            self.message = 'No move to undo.'
+            return
+        self.session.undo()
+        self.actions.pop()
+        self.session.moves = sum(a != Action.SPACE for a in self.actions)
+        self.result = None
+        self.solver_status = SolverStatus.IDLE
+        self.message = 'Last move undone.'
+
+    def solve(self, hint=False):
+        if self.busy or self.animation.busy or self.replay.status != ReplayStatus.EMPTY:
+            return
+        self.request_id += 1
+        self.solve_start = self.session.current_state if hint or self.solve_current else initial_state(self.stage)
+        request = SolverRequest(self.request_id, self.algorithm, self.stage, self.solve_start, 30.0)
+        try:
+            self.gateway.submit(request)
+        except Exception as error:
+            self.message = f'Cannot start solver: {error}'
+            return
+        self.active_request = request.request_id
+        self.hint_mode = hint
+        self.result = None
+        self.solver_status = SolverStatus.RUNNING
+        self.message = 'Finding a hint...' if hint else 'Searching (30 second limit)...'
+
+    def load_replay(self, start, path):
+        # Validate the whole path before replacing the current session.
+        probe = GameSession(BloxorzProblem(self.stage, start))
+        if not probe.problem.check_validity(start):
+            raise ValueError('Replay initial state is unsupported.')
+        for action in path:
+            if not probe.apply_action(action):
+                raise ValueError('Replay contains an invalid move.')
+        self.animation.reset()
+        self.new_session(start)
+        self.replay.load(start, path)
+        self.wait = 0
+        self.message = 'Press Play or Next to watch the solution.'
+
+    def replay_step(self):
+        if self.animation.busy or self.busy:
+            return
+        action = self.replay.step()
+        if action is not None and not self.apply_action(action, replay=True):
+            self.replay.reset()
+            self.message = 'Replay stopped: invalid move.'
+
+    def seek(self, index):
+        if self.busy or self.replay.initial_state is None:
+            return
+        start, path = self.replay.initial_state, self.replay.path
+        index = max(0, min(len(path), index))
+        self.animation.reset()
+        self.new_session(start)
+        for action in path[:index]:
+            if not self.session.apply_action(action):
+                self.replay.reset()
+                self.message = 'Replay stopped: invalid path.'
+                return
+            self.actions.append(action)
+        self.session.moves = sum(a != Action.SPACE for a in self.actions)
+        self.replay.load(start, path)
+        self.replay.index = index
+        self.replay.status = ReplayStatus.FINISHED if index == len(path) else ReplayStatus.PAUSED
+        self.wait = 0
+        self.message = f'Replay at move {index}/{len(path)}.'
+
+    def stop_replay(self):
+        if self.animation.busy:
+            self.animation.reset()
+        self.replay.reset()
+        self.message = 'Continue playing from here.'
+
+    def save(self, path=SAVE_PATH):
+        if self.busy or self.animation.busy:
+            self.message = 'Wait for the current action before saving.'
+            return
+        if not self.stage_paths:
+            self.message = 'This stage has no file to save.'
+            return
+        data = {'version': 1, 'stage': self.stage_paths[self.stage_index].name,
+                'initial_state': state_dict(self.record_start), 'actions': [a.value for a in self.actions],
+                'replay': None, 'settings': {'animate': self.animate, 'sound': self.sound_enabled,
+                'contrast': self.high_contrast, 'large_text': self.large_text, 'speed': self.speed}}
+        if self.replay.initial_state is not None:
+            data['replay'] = {'initial_state': state_dict(self.replay.initial_state),
+                'path': [a.value for a in self.replay.path], 'index': self.replay.index}
+        try:
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(data, indent=2), encoding='utf-8')
+            temporary.replace(path)
+            self.message = 'Session saved.'
+        except OSError as error:
+            self.message = f'Save failed: {error}'
+
+    def load(self, path=SAVE_PATH):
+        try:
+            data = json.loads(Path(path).read_text(encoding='utf-8'))
+            if not isinstance(data, dict):
+                raise ValueError('Save must be an object.')
+            if data['version'] != 1:
+                raise ValueError('Unsupported save version.')
+            index = next(i for i, p in enumerate(self.stage_paths) if p.name == data['stage'])
+            stage = load_stage(str(self.stage_paths[index]))
+            start = read_state(data['initial_state'])
+            actions = tuple(Action(a) for a in data['actions'])
+            problem = BloxorzProblem(stage, start)
+            if len(start.bridges_status) != len(stage.bridges) or not problem.check_validity(start):
+                raise ValueError('Saved state does not fit stage.')
+            probe = GameSession(problem)
+            for action in actions:
+                if not probe.apply_action(action):
+                    raise ValueError('Saved path is invalid.')
+            replay_data = data.get('replay')
+            if replay_data:
+                replay_start = read_state(replay_data['initial_state'])
+                replay_path = tuple(Action(a) for a in replay_data['path'])
+                cursor = replay_data['index']
+                if type(cursor) is not int or not 0 <= cursor <= len(replay_path):
+                    raise ValueError('Invalid replay cursor.')
+                if replay_start != start or actions != replay_path[:cursor]:
+                    raise ValueError('Replay and session disagree.')
+                check = GameSession(BloxorzProblem(stage, replay_start))
+                for action in replay_path:
+                    if not check.apply_action(action):
+                        raise ValueError('Invalid replay path.')
+            settings = data.get('settings', {})
+            if not isinstance(settings, dict):
+                raise ValueError('Invalid settings.')
+            speed = float(settings.get('speed', 1))
+            if speed not in (0.5, 1, 2, 4):
+                raise ValueError('Invalid playback speed.')
+        except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+            self.message = f'Load failed: {error}'
+            return
+        self.invalidate()
+        self.stage, self.stage_index = stage, index
+        self.renderer.set_stage(stage)
+        self.new_session(start)
+        self.session = probe
+        self.actions = list(actions)
+        self.session.moves = sum(a != Action.SPACE for a in actions)
+        if self.session.problem.is_goal(self.session.current_state):
+            self.session.status = 'WON'
+        if replay_data:
+            self.replay.load(replay_start, replay_path)
+            self.replay.index = cursor
+            self.replay.status = ReplayStatus.FINISHED if cursor == len(replay_path) else ReplayStatus.PAUSED
+        self.animate = bool(settings.get('animate', True))
+        self.sound_enabled = bool(settings.get('sound', False)) and self.sound is not None
+        self.high_contrast = bool(settings.get('contrast', False))
+        self.large_text = bool(settings.get('large_text', False))
+        self.speed = speed
+        self.zoom, self.pan = 1.0, [0, 0]
+        self.stage_picker = False
+        self.message = 'Session loaded.'
+
+    def update(self, dt):
+        self.animation.update(dt)
+        response = self.gateway.poll()
+        if response is not None and response.request_id == self.active_request:
+            self.active_request = None
+            self.solver_status, self.result = response.status, response.result
+            if response.status == SolverStatus.SOLVED:
+                if self.hint_mode:
+                    self.message = ('Hint: ' + response.result.path[0].value.lower()) if response.result.path else 'Already at goal.'
+                else:
+                    self.message = 'Your solution is ready.'
+            else:
+                self.message = response.result.error or response.status.value.replace('_', ' ')
+        if (self.pending_action is not None and not self.animation.busy and not self.busy
+                and self.replay.status == ReplayStatus.EMPTY and not (self.menu or self.stage_picker or self.dropdown_open)):
+            action,self.pending_action=self.pending_action,None
+            self.apply_action(action)
+        if self.replay.status == ReplayStatus.PLAYING and not self.animation.busy:
+            self.wait -= dt
+            if self.wait <= 0:
+                self.replay_step()
+                self.wait = 0.12 / self.speed
+        if self.session.status == 'WON' and not self.animation.busy and not self.busy:
+            self.message = 'Stage complete. Choose another stage above.'
+
+    def handle_key(self, key):
+        if self.stage_picker or self.menu or self.dropdown_open:
+            if key == pygame.K_ESCAPE:
+                self.stage_picker = False
+                self.menu = None
+                self.dropdown_open = False
+            return
+        shortcuts = {pygame.K_r: 'restart', pygame.K_z: 'undo', pygame.K_p: 'play',
+                     pygame.K_F5: 'save', pygame.K_F9: 'load', pygame.K_PERIOD: 'step',
+                     pygame.K_COMMA: 'back', pygame.K_HOME: 'camera'}
+        if key in shortcuts:
+            self.command(shortcuts[key])
+            return
+        if key == pygame.K_RETURN and self.session.status == 'WON':
+            self.select_stage(self.stage_index + 1)
+            return
+        mapping = {pygame.K_UP: Action.UP, pygame.K_w: Action.UP, pygame.K_DOWN: Action.DOWN,
+                   pygame.K_s: Action.DOWN, pygame.K_LEFT: Action.LEFT, pygame.K_a: Action.LEFT,
+                   pygame.K_RIGHT: Action.RIGHT, pygame.K_d: Action.RIGHT, pygame.K_SPACE: Action.SPACE}
+        if key in mapping:
+            if self.animation.busy and not self.busy and self.replay.status == ReplayStatus.EMPTY:
+                self.pending_action=mapping[key]
+            else:self.apply_action(mapping[key])
+
+    def command(self, key):
+        if key == 'theme':
+            from src.gui.themes import cycle_theme
+            cycle_theme(self)
+            return
+        if key in ('settings', 'help'):
+            self.pending_action = None
+            self.menu = key
+            self.dropdown_open = False
+            self.replay.pause()
+            return
+        if key == 'close_menu':
+            self.menu = None
+            self.stage_picker = False
+            return
+        if key == 'algorithm_menu':
+            self.dropdown_open = not self.dropdown_open
+            return
+        if key in ('source_start', 'source_current'):
+            self.solve_current = key == 'source_current'
+            return
+        if key == 'details':
+            self.details_open = not self.details_open
+            return
+        if key == 'new_search':
+            self.result = None
+            self.solver_status = SolverStatus.IDLE
+            self.details_open = False
+            return
+        if key == 'rewind':
+            self.seek(0)
+            return
+        if key in ('load', 'recording'):
+            self.menu = None
+        if key.startswith('stage:'):
+            self.select_stage(int(key.split(':')[1]))
+        elif key == 'choose':
+            self.stage_picker = not self.stage_picker
+            self.picker_page = self.stage_index // 20
+            if self.stage_picker:
+                self.replay.pause()
+        elif key == 'page_prev':
+            self.picker_page = max(0, self.picker_page - 1)
+        elif key == 'page_next':
+            self.picker_page = min((len(self.stage_paths) - 1) // 20, self.picker_page + 1)
+        elif key == 'restart': self.restart()
+        elif key == 'undo': self.undo()
+        elif key == 'solve': self.solve()
+        elif key == 'hint': self.solve(True)
+        elif key == 'cancel' and self.busy:
+            self.gateway.cancel(self.active_request)
+        elif key.startswith('algorithm:') and not self.busy:
+            self.algorithm = key.split(':')[1]
+            self.dropdown_open = False
+        elif key == 'source' and not self.busy:
+            self.solve_current = not self.solve_current
+        elif key == 'solution' and self.result and self.result.found and not self.busy:
+            self.load_replay(self.solve_start, self.result.path)
+        elif key == 'recording' and self.actions and not self.busy:
+            self.load_replay(self.record_start, tuple(self.actions))
+        elif key == 'play' and not self.busy:
+            if self.replay.status == ReplayStatus.PLAYING:
+                self.replay.pause()
+            else:
+                if self.replay.status == ReplayStatus.FINISHED:
+                    self.seek(0)
+                self.replay.play()
+        elif key == 'step':
+            self.replay.pause()
+            self.replay_step()
+        elif key == 'back': self.seek(self.replay.index - 1)
+        elif key == 'stop': self.stop_replay()
+        elif key == 'speed':
+            self.speed = {0.5: 1, 1: 2, 2: 4, 4: 0.5}[self.speed]
+        elif key == 'save': self.save()
+        elif key == 'load': self.load()
+        elif key == 'camera': self.zoom, self.pan = 1.0, [0, 0]
+        elif key == 'animate':
+            self.animate = not self.animate
+            if not self.animate: self.animation.reset()
+        elif key == 'sound':
+            if self.sound is None:
+                self.message = 'Audio device unavailable.'
+            else: self.sound_enabled = not self.sound_enabled
+        elif key == 'contrast': self.high_contrast = not self.high_contrast
+        elif key == 'text': self.large_text = not self.large_text
+
+    def draw(self):
+        return draw_presentation(self)
+
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            self.handle_key(event.key)
+        elif event.type == pygame.VIDEORESIZE:
+            self.screen = pygame.display.set_mode((max(theme.MIN_SIZE[0], event.w), max(theme.MIN_SIZE[1], event.h)), pygame.RESIZABLE)
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                for button in reversed(self.buttons):
+                    if button.enabled and button.rect.collidepoint(event.pos):
+                        self.command(button.key)
+                        return
+                if self.stage_picker or self.menu:
+                    if not self.modal_rect.collidepoint(event.pos):
+                        self.command('close_menu')
+                    return
+                if self.dropdown_open:
+                    self.dropdown_open = False
+                    return
+                if self.seek_rect.inflate(0, 12).collidepoint(event.pos) and self.replay.length:
+                    self.seek(round((event.pos[0] - self.seek_rect.x) / self.seek_rect.width * self.replay.length))
+            elif event.button == 3 and self.board_rect.collidepoint(event.pos) and not (self.stage_picker or self.menu or self.dropdown_open):
+                self.dragging = True
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 3:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging and not (self.stage_picker or self.menu):
+            self.pan[0] += event.rel[0]
+            self.pan[1] += event.rel[1]
+        elif event.type == pygame.MOUSEWHEEL and not (self.stage_picker or self.menu or self.dropdown_open) and self.board_rect.collidepoint(pygame.mouse.get_pos()):
+            self.zoom = max(0.5, min(2.5, self.zoom + event.y * 0.1))
+
+    def run(self):
+        pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
-        self.screen = pygame.display.set_mode(self.WINDOW_SIZE)
-        pygame.display.set_caption(f"Bloxorz — Stage {self.stage_index + 1:02}")
-        self.font = pygame.font.Font(None, 32)
-        self.small_font = pygame.font.Font(None, 23)
+        self.screen = pygame.display.set_mode(self.WINDOW_SIZE, pygame.RESIZABLE)
+        pygame.display.set_caption('Bloxorz 3D - Search Lab')
+        self.font = pygame.font.Font(None, 28)
+        self.title_font = pygame.font.Font(None, 38)
+        if pygame.mixer.get_init():
+            rate, _, channels = pygame.mixer.get_init()
+            samples = array('h')
+            for i in range(int(rate * 0.065)):
+                value = int(2200 * math.sin(2 * math.pi * 550 * i / rate) * (1 - i / (rate * 0.065)))
+                samples.extend([value] * channels)
+            self.sound = pygame.mixer.Sound(buffer=samples)
         clock = pygame.time.Clock()
-        running = True
-
-        while running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+        try:
+            running = True
+            while running:
+                dt = min(clock.tick(60) / 1000, 0.1)
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open)):
                         running = False
                     else:
-                        self.handle_key(event.key)
-
-            self.draw()
-            pygame.display.flip()
-            clock.tick(60)
-
-        pygame.quit()
-
-    def handle_key(self, key: int) -> None:
-        if self.session.status == "WON":
-            if key == pygame.K_RETURN:
-                self.next_stage()
-            elif key == pygame.K_r:
-                self.session.restart()
-                self.message = "Stage restarted."
-                self.message_color = self.MUTED
-            return
-
-        controls = {
-            pygame.K_UP: Action.UP,
-            pygame.K_DOWN: Action.DOWN,
-            pygame.K_LEFT: Action.LEFT,
-            pygame.K_RIGHT: Action.RIGHT,
-            pygame.K_SPACE: Action.SPACE,
-        }
-        if key == pygame.K_r:
-            self.session.restart()
-            self.message = "Stage restarted."
-            self.message_color = self.MUTED
-            return
-        if key == pygame.K_z:
-            self.session.undo()
-            self.message = "Undid the last move." if self.session.history else "No move to undo."
-            self.message_color = self.MUTED
-            return
-
-        action = controls.get(key)
-        if action is None:
-            return
-        if self.session.apply_action(action):
-            if self.session.status == "WON":
-                if self.stage_index + 1 < len(self.stage_paths):
-                    self.message = "Stage cleared! Press ENTER for the next stage."
-                elif self.stage_paths:
-                    self.message = "All 3 stages complete! Press R to replay this stage."
-                else:
-                    self.message = "You win! Press R to play again."
-                self.message_color = self.GOAL
-            else:
-                self.message = "Move accepted."
-                self.message_color = self.TEXT
-        else:
-            self.message = "That move is blocked."
-            self.message_color = (238, 111, 105)
-
-    def next_stage(self) -> None:
-        next_index = self.stage_index + 1
-        if next_index >= len(self.stage_paths):
-            self.message = "All 3 stages are complete! Press R to replay this stage."
-            self.message_color = self.GOAL
-            return
-
-        self.stage_index = next_index
-        self.stage = load_stage(str(self.stage_paths[self.stage_index]))
-        initial_state = GameState(
-            pos1=self.stage.start,
-            pos2=self.stage.start,
-            orientation=Orientation.STANDING,
-            active_cube=0,
-            bridges_status=self.stage.initial_bridge_mask,
-        )
-        self.session = GameSession(BloxorzProblem(self.stage, initial_state))
-        self._set_board_layout()
-        self.message = "New stage! Arrow keys to move."
-        self.message_color = self.TEXT
-        pygame.display.set_caption(f"Bloxorz — Stage {self.stage_index + 1:02}")
-
-    def draw(self) -> None:
-        assert self.screen is not None and self.font is not None and self.small_font is not None
-        screen = self.screen
-        screen.fill(self.BACKGROUND)
-
-        title = self.font.render("BLOXORZ", True, self.TEXT)
-        screen.blit(title, (42, 24))
-        stage_label = f"Stage {self.stage_index + 1:02}"
-        if self.stage_paths:
-            stage_label += f" / {len(self.stage_paths):02}"
-        subtitle = self.small_font.render(f"{stage_label}  •  Arrow keys to move", True, self.MUTED)
-        screen.blit(subtitle, (190, 31))
-
-        self.draw_grid()
-        self.draw_block(self.session.current_state)
-
-        panel_x = self.board_x + self.board_width + 30
-        panel = pygame.Rect(panel_x, self.board_y, 900 - panel_x - 28, self.board_height)
-        pygame.draw.rect(screen, self.PANEL, panel, border_radius=14)
-        self.draw_text("HOW TO PLAY", (panel.x + 18, panel.y + 20), self.TEXT)
-        instructions = [
-            "↑  ↓  ←  →   Roll",
-            "SPACE       Switch cube",
-            "Z           Undo",
-            "R           Restart",
-            "ESC         Quit",
-        ]
-        for index, line in enumerate(instructions):
-            self.draw_text(line, (panel.x + 18, panel.y + 62 + index * 32), self.MUTED, small=True)
-
-        state = self.session.current_state
-        state_lines = [
-            f"Moves: {self.session.moves}",
-            f"Position: {state.pos1}",
-            f"Orientation: {state.orientation.value}",
-            f"Status: {self.session.status}",
-        ]
-        state_y = panel.y + 250
-        for index, line in enumerate(state_lines):
-            self.draw_text(line, (panel.x + 18, state_y + index * 30), self.TEXT if index == 0 else self.MUTED, small=True)
-
-        message = self.small_font.render(self.message, True, self.message_color)
-        screen.blit(message, (42, min(self.WINDOW_SIZE[1] - 34, self.board_y + self.board_height + 16)))
-
-    def draw_grid(self) -> None:
-        assert self.screen is not None and self.small_font is not None
-        bridge_cells = {
-            cell: index
-            for index, cells in enumerate(self.stage.bridges.values())
-            for cell in cells
-        }
-        for row_index, row in enumerate(self.stage.grid):
-            for col_index, tile in enumerate(row):
-                coord = (row_index, col_index)
-                x = self.board_x + col_index * self.cell_size
-                y = self.board_y + row_index * self.cell_size
-                rect = pygame.Rect(x + 2, y + 2, self.cell_size - 4, self.cell_size - 4)
-                color = self.VOID
-                label = ""
-                bridge_index = bridge_cells.get(coord)
-                if bridge_index is not None:
-                    active = bridge_index < len(self.session.current_state.bridges_status) and self.session.current_state.bridges_status[bridge_index]
-                    color = self.BRIDGE_ON if active else self.VOID
-                    label = "BR" if active else ""
-                elif coord == self.stage.start:
-                    color, label = self.FLOOR, "S"
-                elif coord == self.stage.goal:
-                    color, label = self.GOAL, "G"
-                elif tile == TileType.VOID:
-                    color = self.VOID
-                elif tile == TileType.FRAGILE:
-                    color, label = self.FRAGILE, "F"
-                elif tile == TileType.BRIDGE:
-                    color = self.BRIDGE_ON
-                else:
-                    color = self.FLOOR
-
-                pygame.draw.rect(self.screen, color, rect, border_radius=6)
-                switch = self.stage.switches.get(coord)
-                if switch is not None:
-                    label = {"SOFT": "O", "HEAVY": "X", "SPLIT": "↔"}.get(switch.type.value, "?")
-                if label:
-                    text = self.small_font.render(label, True, self.TEXT)
-                    self.screen.blit(text, text.get_rect(center=rect.center))
-
-        # Column and row indices make it easier to compare the display to JSON coordinates.
-        for col in range(len(self.stage.grid[0])):
-            label = self.small_font.render(str(col), True, self.MUTED)
-            self.screen.blit(label, (self.board_x + col * self.cell_size + 7, self.board_y - 22))
-        for row in range(len(self.stage.grid)):
-            label = self.small_font.render(str(row), True, self.MUTED)
-            self.screen.blit(label, (self.board_x - 23, self.board_y + row * self.cell_size + 7))
-
-    def draw_block(self, state: GameState) -> None:
-        assert self.screen is not None
-        blocks = (state.pos1,) if state.orientation == Orientation.STANDING else (state.pos1, state.pos2)
-        for index, (row, col) in enumerate(blocks):
-            x = self.board_x + col * self.cell_size
-            y = self.board_y + row * self.cell_size
-            rect = pygame.Rect(x + 7, y + 7, self.cell_size - 14, self.cell_size - 14)
-            active = state.orientation == Orientation.SPLIT and index == state.active_cube
-            color = self.BLOCK_ACTIVE if active else self.BLOCK
-            pygame.draw.rect(self.screen, color, rect, border_radius=9)
-            pygame.draw.rect(self.screen, (255, 238, 185), rect, width=2, border_radius=9)
-
-    def draw_text(self, text: str, position: tuple[int, int], color: tuple[int, int, int], *, small: bool = False) -> None:
-        assert self.screen is not None
-        font = self.small_font if small else self.font
-        assert font is not None
-        self.screen.blit(font.render(text, True, color), position)
+                        self.handle_event(event)
+                self.update(dt)
+                if self.draw():
+                    pygame.display.flip()
+        finally:
+            self.gateway.close()
+            if hasattr(self.renderer, 'close'):
+                self.renderer.close()
+            pygame.quit()

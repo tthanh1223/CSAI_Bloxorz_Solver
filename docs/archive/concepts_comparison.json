@@ -1,0 +1,27 @@
+{
+  "window": [
+    1180,
+    800
+  ],
+  "stage": "levels/stage_01.json",
+  "block": {
+    "position": [
+      1,
+      1
+    ],
+    "dimensions": [
+      1,
+      1,
+      2
+    ]
+  },
+  "projection": {
+    "origin": [
+      352,
+      262
+    ],
+    "tile_width": 92,
+    "tile_depth": 46.0
+  },
+  "controls": "Illustrative only; no solver or gameplay wired in previews."
+}
