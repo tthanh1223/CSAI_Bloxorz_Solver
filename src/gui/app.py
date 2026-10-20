@@ -632,11 +632,13 @@ class BloxorzApp:
         if pygame.mixer.get_init():
             from src.gui.sfx import SoundBank
             self.sound = SoundBank()
-            bgm_path = ROOT / 'assets' / 'bgm' / 'cheerful_puzzle.wav'
+            bgm_path = ROOT / 'assets' / 'bgm' / 'the_mountain-retro-game-593063.mp3'
+            if not bgm_path.exists():
+                bgm_path = ROOT / 'assets' / 'bgm' / 'cheerful_puzzle.wav'
             if bgm_path.exists():
                 try:
                     pygame.mixer.music.load(str(bgm_path))
-                    pygame.mixer.music.set_volume(0.28)
+                    pygame.mixer.music.set_volume(0.32)
                     pygame.mixer.music.play(-1)
                 except Exception:
                     pass

@@ -64,6 +64,15 @@ def _draw(app):
     mono_lg = T.font('mono_lg', app.large_text)
     caption = T.font('caption', app.large_text)
 
+    def label(value, x, y, color=T.TEXT, f=body, max_width=None):
+        text(screen, f, value, (x, y), color, max_width)
+
+    def button(key, value, x, y, width, enabled=True, kind='secondary', selected=False):
+        b = Button(key, value, pygame.Rect(x, y, width, T.BUTTON_HEIGHT), enabled, selected, kind)
+        app.buttons.append(b)
+        b.draw(screen, body)
+        return b
+
     app.buttons = []
     app.seek_rect = pygame.Rect(0, 0, 0, 0)
     style = getattr(app, 'visual_style', 'dream')
@@ -83,7 +92,7 @@ def _draw(app):
         pygame.draw.line(screen, T.LINE, (24, 78), (w - 24, 78))
 
     panel_x = w - T.PANEL_WIDTH - 24
-    app.board_rect = pygame.Rect(0, 80, panel_x - 16, h - 170)
+    app.board_rect = pygame.Rect(0, 80, panel_x - 16, h - 176)
     board = getattr(app, '_board_surface', None)
     if board is None or board.get_size() != app.board_rect.size:
         board = pygame.Surface(app.board_rect.size, pygame.SRCALPHA)
@@ -104,69 +113,57 @@ def _draw(app):
         pygame.draw.rect(panel, border_col, panel.get_rect(), 1, border_radius=22)
     screen.blit(panel, (panel_x - 16, 76))
 
-    def label(value, x, y, color=T.TEXT, f=body, max_width=None):
-        text(screen, f, value, (x, y), color, max_width)
-
-    def button(key, value, x, y, width, enabled=True, kind='secondary', selected=False):
-        b = Button(key, value, pygame.Rect(x, y, width, T.BUTTON_HEIGHT), enabled, selected, kind)
-        app.buttons.append(b)
-        b.draw(screen, body)
-        return b
-
     # Quiet, single-line navigation
     label('B L O X O R Z', 32, 18, f=heading)
     label(f'{app.session.moves} MOVES', 34, 48, (215, 230, 225) if forest or style == 'blueprint' else T.MUTED, f=caption)
-    button('theme', {'dream': '04 / DREAM CITY', 'blueprint': '05 / PAPER BLUEPRINT',
-                     'forest': '02 / FOREST RUINS', 'forest_gl': 'FOREST / OPENGL'}.get(style, style),
+    button('theme', {'dream': '01 / DREAM CITY', 'forest': '02 / FOREST RUINS',
+                     'blueprint': '03 / PAPER BLUEPRINT', 'forest_gl': 'FOREST / OPENGL'}.get(style, style),
            316, 20, 268, style != 'forest_gl', kind='quiet')
     button('choose', f'Stage {app.stage_index + 1:02}', panel_x - 32, 20, 128, bool(app.stage_paths), 'quiet')
     button('help', '?', w - 152, 20, 40, kind='quiet')
     button('settings', 'Settings', w - 108, 20, 88, kind='quiet')
 
-
     idle = not app.busy and not app.animation.busy
     replaying = app.replay.status != ReplayStatus.EMPTY
     manual = idle and not replaying
 
-    # Centered Floating Control Dock (Bottom Bar - Image 3 Inspired)
-    dock_y = h - 68
+    # Centered Floating Controls (Bottom Bar) - Clean pills with NO rectangular background container
+    btn_y = h - 56
     if not replaying:
-        dock_w = 340
-        dock_x = app.board_rect.centerx - dock_w // 2
-        dock_surf = pygame.Surface((dock_w, 52), pygame.SRCALPHA)
-        dock_surf.fill((*T.PANEL, 218 if forest else 236))
-        pygame.draw.rect(dock_surf, (*T.LINE, 180), dock_surf.get_rect(), 1, border_radius=26)
-        screen.blit(dock_surf, (dock_x, dock_y))
+        btn_w = 108
+        btn_gap = 14
+        total_w = btn_w * 3 + btn_gap * 2
+        start_x = app.board_rect.centerx - total_w // 2
 
-        button('undo', 'Undo', dock_x + 8, dock_y + 6, 102, manual and bool(app.actions), kind='dock_item')
-        button('restart', 'Restart', dock_x + 118, dock_y + 6, 104, True, kind='dock_item')
-        button('hint', 'Hint', dock_x + 230, dock_y + 6, 102, manual, kind='dock_item')
+        button('undo', 'Undo', start_x, btn_y, btn_w, manual and bool(app.actions), kind='pill')
+        button('restart', 'Restart', start_x + btn_w + btn_gap, btn_y, btn_w, True, kind='pill')
+        button('hint', 'Hint', start_x + (btn_w + btn_gap) * 2, btn_y, btn_w, manual, kind='pill')
     else:
         dock_w = min(530, max(390, panel_x - 32))
         dock_x = app.board_rect.centerx - dock_w // 2
-        dock_surf = pygame.Surface((dock_w, 52), pygame.SRCALPHA)
-        dock_surf.fill((*T.PANEL, 218 if forest else 236))
-        pygame.draw.rect(dock_surf, (*T.LINE, 180), dock_surf.get_rect(), 1, border_radius=26)
-        screen.blit(dock_surf, (dock_x, dock_y))
+        dock_surf = pygame.Surface((dock_w, 42), pygame.SRCALPHA)
+        pygame.draw.rect(dock_surf, (*T.PANEL, 228 if forest else 240), dock_surf.get_rect(), border_radius=21)
+        pygame.draw.rect(dock_surf, (*T.LINE, 180), dock_surf.get_rect(), 1, border_radius=21)
+        screen.blit(dock_surf, (dock_x, btn_y))
 
-        button('back', 'Back', dock_x + 8, dock_y + 6, 64, app.replay.index > 0, kind='dock_item')
+        button('back', 'Back', dock_x + 8, btn_y + 1, 64, app.replay.index > 0, kind='dock_item')
         button('play', 'Pause' if app.replay.status == ReplayStatus.PLAYING else 'Play',
-               dock_x + 78, dock_y + 6, 96, not app.busy, 'primary')
-        button('step', 'Next', dock_x + 180, dock_y + 6, 64, idle and app.replay.index < app.replay.length, kind='dock_item')
-        button('speed', f'{app.speed:g}×', dock_x + 250, dock_y + 6, 54, kind='dock_item')
+               dock_x + 78, btn_y + 1, 96, not app.busy, 'primary')
+        button('step', 'Next', dock_x + 180, btn_y + 1, 64, idle and app.replay.index < app.replay.length, kind='dock_item')
+        button('speed', f'{app.speed:g}×', dock_x + 250, btn_y + 1, 54, kind='dock_item')
 
         timeline_x = dock_x + 312
         seek_w = max(44, dock_w - 386)
-        app.seek_rect = pygame.Rect(timeline_x, dock_y + 23, seek_w, 6)
+        app.seek_rect = pygame.Rect(timeline_x, btn_y + 18, seek_w, 6)
         pygame.draw.rect(screen, T.LINE, app.seek_rect, border_radius=3)
         ratio = app.replay.index / max(1, app.replay.length)
         fill = app.seek_rect.copy()
         fill.width = int(fill.width * ratio)
         pygame.draw.rect(screen, T.ACCENT, fill, border_radius=3)
         pygame.draw.circle(screen, T.ACCENT, (app.seek_rect.x + fill.width, app.seek_rect.centery), 5)
-        label(f'{app.replay.index}/{app.replay.length}', timeline_x + seek_w + 10, dock_y + 16, T.MUTED, f=caption)
+        label(f'{app.replay.index}/{app.replay.length}', timeline_x + seek_w + 10, btn_y + 11, T.MUTED, f=caption)
 
-    # Toast line
+    # Toast status message (Clean floating chip above controls - Never overlaps buttons)
     message = app.message
     hidden = ('Rolling...', 'Move accepted.', 'Stage loaded. Arrow keys / WASD to roll.',
               'Roll with arrows or WASD. Reach G standing upright.')
@@ -175,10 +172,15 @@ def _draw(app):
     if app.busy:
         message = ''
     if message:
-        footer = pygame.Surface((panel_x - 40, 26), pygame.SRCALPHA)
-        pygame.draw.rect(footer, (*T.PANEL, 200), footer.get_rect(), border_radius=8)
-        screen.blit(footer, (24, h - 34))
-    label(message, 32, h - 32, T.TEXT, max_width=panel_x - 48)
+        tw = caption.size(message)[0]
+        pill_w = tw + 28
+        pill_x = max(24, min(panel_x - pill_w - 16, app.board_rect.centerx - pill_w // 2))
+        pill_y = h - 92
+        pill_surf = pygame.Surface((pill_w, 26), pygame.SRCALPHA)
+        pygame.draw.rect(pill_surf, (*T.PANEL, 230 if forest else 242), pill_surf.get_rect(), border_radius=13)
+        pygame.draw.rect(pill_surf, (*T.LINE, 180), pill_surf.get_rect(), 1, border_radius=13)
+        screen.blit(pill_surf, (pill_x, pill_y))
+        label(message, pill_x + 14, pill_y + 4, T.TEXT, f=caption)
 
     # Right Bento Dashboard Panel
     x, pw, y = panel_x, T.PANEL_WIDTH, 120

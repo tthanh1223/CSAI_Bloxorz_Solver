@@ -3,7 +3,7 @@ from pathlib import Path
 import pygame
 from src.gui import theme as T
 
-NAMES={'dream':'Dream City','blueprint':'Paper Blueprint','forest':'Forest Ruins'}
+NAMES = {'dream': 'Dream City', 'forest': 'Forest Ruins', 'blueprint': 'Paper Blueprint'}
 KEYS=('BG','PANEL','SURFACE','HOVER','PRESSED','TEXT','MUTED','DISABLED','LINE','ACCENT','ACCENT_HOVER','INK','FLOOR','BLOCK')
 DREAM = (
     (243, 196, 192),  # BG
@@ -18,8 +18,8 @@ DREAM = (
     (236, 138, 92),   # ACCENT (warm coral terracotta)
     (248, 158, 114),  # ACCENT_HOVER
     (255, 252, 248),  # INK
-    (210, 229, 225),  # FLOOR (celadon mint terrazzo #D2E5E1)
-    (232, 162, 120),  # BLOCK (warm sunlit terracotta #E8A278)
+    (252, 238, 234),  # FLOOR (luminous peach-pink alabaster, matching sunset)
+    (238, 142, 98),   # BLOCK (warm sunlit rose-gold terracotta)
 )
 
 BLUEPRINT = (
@@ -35,8 +35,8 @@ BLUEPRINT = (
     (216, 88, 32),    # ACCENT (vibrant architectural terracotta #D85820)
     (238, 110, 52),   # ACCENT_HOVER
     (255, 255, 255),  # INK
-    (234, 228, 211),  # FLOOR (warm off-white cardstock #EAE4D3)
-    (216, 88, 32),    # BLOCK (vibrant terracotta orange #D85820)
+    (248, 244, 232),  # FLOOR (crisp luminous architectural vellum cardstock)
+    (226, 82, 28),    # BLOCK (vibrant architectural terracotta orange)
 )
 
 FOREST = (
@@ -52,8 +52,8 @@ FOREST = (
     (201, 164, 59),   # ACCENT (antique relic gold #C9A43B)
     (226, 188, 82),   # ACCENT_HOVER
     (18, 28, 20),     # INK
-    (106, 115, 99),   # FLOOR (chiseled limestone slab #6A7363)
-    (201, 164, 59),   # BLOCK (weathered antique gold relic #C9A43B)
+    (178, 198, 172),  # FLOOR (luminous weathered temple stone)
+    (224, 182, 64),   # BLOCK (relic antique gold)
 )
 
 PALETTES = {

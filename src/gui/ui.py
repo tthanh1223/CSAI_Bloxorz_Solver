@@ -91,6 +91,14 @@ def draw_vector_icon(surface, name, center, color, size=16):
         pygame.draw.rect(surface, color, r, border_radius=3)
 
 
+_BUTTON_ANIM: dict[str, dict[str, float]] = {}
+
+
+def lerp_color(c1, c2, t: float):
+    t = max(0.0, min(1.0, t))
+    return tuple(round(a + (b - a) * t) for a, b in zip(c1[:3], c2[:3]))
+
+
 @dataclass
 class Button:
     key: str
@@ -106,30 +114,79 @@ class Button:
         hover = self.enabled and self.rect.collidepoint(mouse_pos)
         pressed = hover and pygame.mouse.get_pressed()[0]
 
-        # Mechanical travel: shift down 2px when pressed
-        draw_rect = self.rect.move(0, 2) if pressed else self.rect
+        # Smooth interactive animation tracking (60fps ease)
+        btn_id = f"{self.key}_{self.rect.x}_{self.rect.y}"
+        anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0})
+        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.35
+        anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.45
+        if not hover and anim['hover'] < 0.002:
+            anim['hover'] = 0.0
+        if not pressed and anim['press'] < 0.002:
+            anim['press'] = 0.0
+        h_t = anim['hover']
+        p_t = anim['press']
 
-        if self.kind == 'primary':
-            color = theme.ACCENT_HOVER if hover else theme.ACCENT
-            if pressed:
-                color = tuple(max(0, c - 24) for c in theme.ACCENT)
-            if not self.enabled:
-                color = theme.SURFACE
-            foreground = theme.INK if self.enabled else theme.DISABLED
-        elif self.kind == 'dock_item':
-            # Semi-translucent glass pill button inside floating dock
-            if pressed:
-                color = tuple(min(255, c + 15) for c in theme.PRESSED)
-            elif hover:
-                color = tuple(min(255, c + 20) for c in theme.HOVER)
-            else:
-                color = tuple((*theme.SURFACE, 180)) if len(theme.SURFACE) == 4 else theme.SURFACE
-            foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
-        else:
-            color = theme.PRESSED if pressed else theme.HOVER if hover else theme.SURFACE
-            if self.kind == 'quiet' and not hover:
+        # Physical translation: lift up smoothly on hover, depress down on click
+        dy = -round(h_t * 2.0) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
+        draw_rect = self.rect.move(0, dy)
+
+        # Soft dynamic drop shadow when lifted / enabled
+        if self.enabled and self.kind != 'quiet':
+            shadow_offset = round(2.0 + h_t * 2.5 - p_t * 1.5)
+            shadow_rect = self.rect.move(0, shadow_offset)
+            shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
+            radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
+            pygame.draw.rect(shadow_surf, (0, 0, 0, int(25 + 35 * h_t)), shadow_surf.get_rect(), border_radius=radius)
+            surface.blit(shadow_surf, shadow_rect)
+
+        # Smooth color transitions
+        if h_t == 0.0 and p_t == 0.0:
+            if self.kind == 'primary':
+                color = theme.ACCENT if self.enabled else theme.SURFACE
+                foreground = theme.INK if self.enabled else theme.DISABLED
+            elif self.kind == 'quiet':
                 color = None
-            foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
+                foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
+            elif self.kind == 'dock_item':
+                color = tuple((*theme.SURFACE, 200)) if len(theme.SURFACE) == 4 else theme.SURFACE
+                foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
+            else:
+                color = theme.SURFACE
+                foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
+        else:
+            if self.kind == 'primary':
+                color = lerp_color(theme.ACCENT, theme.ACCENT_HOVER, h_t)
+                if p_t > 0.01:
+                    dark_accent = tuple(max(0, c - 26) for c in theme.ACCENT)
+                    color = lerp_color(color, dark_accent, p_t)
+                if not self.enabled:
+                    color = theme.SURFACE
+                foreground = theme.INK if self.enabled else theme.DISABLED
+            elif self.kind == 'dock_item':
+                base_col = tuple((*theme.SURFACE, 200)) if len(theme.SURFACE) == 4 else theme.SURFACE
+                hover_col = tuple(min(255, c + 22) for c in theme.HOVER)
+                press_col = tuple(min(255, c + 15) for c in theme.PRESSED)
+                color = lerp_color(base_col, hover_col, h_t)
+                if p_t > 0.01:
+                    color = lerp_color(color, press_col, p_t)
+                base_fg = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
+                bright_fg = theme.ACCENT if self.selected else (tuple(min(255, c + 35) for c in theme.TEXT) if self.enabled else theme.DISABLED)
+                foreground = lerp_color(base_fg, bright_fg, h_t)
+            else:
+                base_col = theme.SURFACE
+                hover_col = theme.HOVER
+                press_col = theme.PRESSED
+                color = lerp_color(base_col, hover_col, h_t)
+                if p_t > 0.01:
+                    color = lerp_color(color, press_col, p_t)
+                if self.kind == 'quiet':
+                    if h_t < 0.02:
+                        color = None
+                    else:
+                        color = tuple((*color[:3], int(190 * h_t)))
+                base_fg = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
+                bright_fg = theme.ACCENT if self.selected else (tuple(min(255, c + 40) for c in theme.TEXT) if self.enabled else theme.DISABLED)
+                foreground = lerp_color(base_fg, bright_fg, h_t)
 
         # Draw tactile background
         if color:
@@ -137,17 +194,17 @@ class Button:
             pygame.draw.rect(surface, color, draw_rect, border_radius=radius)
 
             if self.kind == 'primary' and self.enabled:
+                # Polished glass top shine highlight
                 gradient = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-                for row in range(draw_rect.height):
-                    t = row / max(1, draw_rect.height - 1)
-                    shade = tuple(min(255, int(c + (1 - t) * 18 - t * 6)) for c in color[:3])
-                    pygame.draw.line(gradient, shade, (0, row), (draw_rect.width, row))
+                for row in range(max(1, draw_rect.height // 2)):
+                    alpha = int(45 * (1.0 - row / (draw_rect.height / 2)))
+                    pygame.draw.line(gradient, (255, 255, 255, alpha), (0, row), (draw_rect.width, row))
                 mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
                 pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
                 gradient.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
                 surface.blit(gradient, draw_rect)
             elif self.kind != 'quiet':
-                border_color = theme.ACCENT if hover and self.enabled else theme.LINE
+                border_color = lerp_color(theme.LINE, theme.ACCENT, h_t) if (self.enabled and h_t > 0) else theme.LINE
                 pygame.draw.rect(surface, border_color, draw_rect, 1, border_radius=radius)
 
         if self.selected and self.kind != 'dock_item':
@@ -157,13 +214,13 @@ class Button:
         has_vector_icon = self.icon or self.key in ('undo', 'restart', 'hint', 'play', 'step', 'back', 'stop')
         icon_name = self.icon or ('pause' if self.label == 'Pause' else self.key)
 
-        if has_vector_icon and self.kind in ('dock_item', 'icon'):
+        if has_vector_icon and (self.kind in ('dock_item', 'icon') or (self.kind == 'pill' and self.key in ('undo', 'restart', 'hint'))):
             # Draw icon on the left, label on the right
             icon_cx = draw_rect.x + 22
             icon_cy = draw_rect.centery
-            draw_vector_icon(surface, icon_name, (icon_cx, icon_cy), foreground, size=16)
+            draw_vector_icon(surface, icon_name, (icon_cx, icon_cy), foreground, size=15)
             lbl = font.render(self.label, True, foreground)
-            lbl_rect = lbl.get_rect(midleft=(icon_cx + 14, draw_rect.centery))
+            lbl_rect = lbl.get_rect(midleft=(icon_cx + 12, draw_rect.centery))
             surface.blit(lbl, lbl_rect)
         else:
             # Centered label

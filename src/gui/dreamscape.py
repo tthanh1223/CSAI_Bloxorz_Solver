@@ -113,10 +113,12 @@ def blueprint(size, cells, stage_index):
         rmin = min(r for r, c in cells)
         cmin = min(c for r, c in cells)
         span = max(max(r for r, c in cells) - rmin + 1, max(c for r, c in cells) - cmin + 1)
-        unit = min(13, 130 / span)
+        unit = min(11, 88 // max(1, span))
+        grid_top = 162
         for r, c in cells:
-            pygame.draw.rect(result, (72, 130, 154), (54 + (c - cmin) * unit, h - 250 + (r - rmin) * unit, unit, unit), 1)
-        label(f'STAGE  {stage_index + 1:02}  (REFERENCE)', 54, h - 162)
-        label('FLOOR PLAN', 54, h - 142)
+            pygame.draw.rect(result, (72, 140, 168), (72 + (c - cmin) * unit, grid_top + (r - rmin) * unit, unit, unit), 1)
+        grid_bottom = grid_top + (max(r for r, c in cells) - rmin + 1) * unit
+        label(f'STAGE  {stage_index + 1:02}  (REFERENCE)', 72, grid_bottom + 8)
+        label('FLOOR PLAN', 72, grid_bottom + 22)
 
     return result

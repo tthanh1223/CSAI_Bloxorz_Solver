@@ -521,11 +521,13 @@ class IsometricRenderer:
                 else:pygame.draw.polygon(self._base,ink,pts)
             elif kind=='marker':self._marker(self._base,*payload)
             else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
-        seam={'dream':(48,47,48),'blueprint':(48,47,48),'forest':(102,112,80)}.get(self.style,(168,174,163))
-        seams=pygame.Surface(self.size,pygame.SRCALPHA)
-        for outline in tile_outlines:pygame.draw.aalines(seams,(*seam,165),True,outline)
-        self._base.blit(seams,(0,0))
-        if self.style=='forest':self._moss_edges(shown)
+        seam = {'dream': (48, 47, 48), 'blueprint': (48, 47, 48), 'forest': (102, 112, 80)}.get(self.style, (168, 174, 163))
+        seams = pygame.Surface(self.size, pygame.SRCALPHA)
+        for outline in tile_outlines:
+            pygame.draw.aalines(seams, (*seam, 165), True, outline)
+        self._base.blit(seams, (0, 0))
+        if self.style in ('forest', 'dream'):
+            self._nature_adornments(shown)
         # Retain a bounded number of full-size buffers, never one per state.
         self._frame=pygame.Surface(self.size,pygame.SRCALPHA)
         self._frame_key=None
@@ -603,8 +605,26 @@ class IsometricRenderer:
             return
         pygame.draw.polygon(surface, color, pts)
         if len(pts) >= 4 and pts[1][1] <= pts[2][1]:
-            sheen = tuple(min(255, c + 36) for c in color)
+            sheen = tuple(min(255, c + 42) for c in color)
             pygame.draw.aaline(surface, sheen, pts[0], pts[1])
+
+        # Tactile center dividing seam across elongated faces (1x1x2 block division)
+        if len(pts) == 4:
+            d01 = (pts[1][0] - pts[0][0]) ** 2 + (pts[1][1] - pts[0][1]) ** 2
+            d12 = (pts[2][0] - pts[1][0]) ** 2 + (pts[2][1] - pts[1][1]) ** 2
+            if d01 > d12 * 2.2:
+                m0 = ((pts[0][0] + pts[1][0]) // 2, (pts[0][1] + pts[1][1]) // 2)
+                m1 = ((pts[3][0] + pts[2][0]) // 2, (pts[3][1] + pts[2][1]) // 2)
+                seam_col = (48, 42, 40) if self.style in ('dream', 'blueprint') else (88, 70, 24)
+                pygame.draw.aaline(surface, seam_col, m0, m1)
+                pygame.draw.aaline(surface, tuple(min(255, c + 35) for c in color), (m0[0] + 1, m0[1]), (m1[0] + 1, m1[1]))
+            elif d12 > d01 * 2.2:
+                m0 = ((pts[1][0] + pts[2][0]) // 2, (pts[1][1] + pts[2][1]) // 2)
+                m1 = ((pts[0][0] + pts[3][0]) // 2, (pts[0][1] + pts[3][1]) // 2)
+                seam_col = (48, 42, 40) if self.style in ('dream', 'blueprint') else (88, 70, 24)
+                pygame.draw.aaline(surface, seam_col, m0, m1)
+                pygame.draw.aaline(surface, tuple(min(255, c + 35) for c in color), (m0[0], m0[1] + 1), (m1[0], m1[1] + 1))
+
         edge = (48, 47, 48) if self.style in ('dream', 'blueprint') else color
         self._outline(surface, edge, pts, cut)
 
@@ -734,8 +754,8 @@ class IsometricRenderer:
             highlight = tuple(min(255, c + 30) for c in color)
             pygame.draw.aaline(surface, highlight, points[0], points[1])
 
-    def _moss_edges(self, shown):
-        """Crisp architectural moss line along exposed front-facing edges."""
+    def _nature_adornments(self, shown):
+        """Theme-specific decorative vines, roses, and ancient moss along exposed perimeter edges."""
         cells = set()
         for r, row in enumerate(self.stage.grid):
             for c, tile in enumerate(row):
@@ -745,13 +765,33 @@ class IsometricRenderer:
                         cells.add((r, c))
                 elif tile != TileType.VOID:
                     cells.add((r, c))
+        rng = random.Random(728)
         for r, c in cells:
             for neighbor, start, end in (((r + 1, c), (r + 1, c), (r + 1, c + 1)), ((r, c + 1), (r, c + 1), (r + 1, c + 1))):
                 if neighbor in cells:
                     continue
                 pa = self.project((start[0], start[1], -0.04))
                 pb = self.project((end[0], end[1], -0.04))
-                pygame.draw.aaline(self._base, (92, 118, 54), pa, pb)
+
+                if self.style == 'dream':
+                    # Romantic climbing rose vines with delicate leaves & peach-pink floral petals
+                    pygame.draw.aaline(self._base, (104, 138, 88), pa, pb)
+                    for t in (0.22, 0.55, 0.82):
+                        vx = pa[0] + (pb[0] - pa[0]) * t
+                        vy = pa[1] + (pb[1] - pa[1]) * t
+                        lx, ly = vx + rng.uniform(-1, 1), vy + rng.uniform(2, 6)
+                        pygame.draw.circle(self._base, (90, 130, 78), (round(lx), round(ly)), 2)
+                        if rng.random() > 0.35:
+                            petal = rng.choice(((255, 178, 192), (252, 202, 210), (255, 222, 190)))
+                            pygame.draw.circle(self._base, petal, (round(lx + 1), round(ly + 2)), 2)
+                            pygame.draw.circle(self._base, (255, 248, 230), (round(lx + 1), round(ly + 2)), 1)
+                elif self.style == 'forest':
+                    # Ancient weathered ivy & moss tendrils
+                    pygame.draw.aaline(self._base, (92, 118, 54), pa, pb)
+                    for t in (0.28, 0.72):
+                        vx = pa[0] + (pb[0] - pa[0]) * t
+                        vy = pa[1] + (pb[1] - pa[1]) * t
+                        pygame.draw.circle(self._base, (68, 96, 42), (round(vx), round(vy + 3)), 2)
 
     def _marker(self, surface, point, kind):
         r, c, z = point
