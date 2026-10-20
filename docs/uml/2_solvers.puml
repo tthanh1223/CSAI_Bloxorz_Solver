@@ -1,0 +1,117 @@
+@startuml 2_solvers
+!include style.iuml
+title Bloxorz – Solvers (src/contract.py, src/solvers)   ·   main @ 1d8eab4
+
+package "contract.py" as P_contract {
+  abstract class SearchSolver <<ABC>> {
+    + {abstract} solve(problem) : SolverResult
+  }
+  class SolverResult <<dataclass>> {
+    {field} + found : bool
+    {field} + path : List[str]
+    {field} + solution_length : int
+    {field} + total_cost : float
+    {field} + expanded_nodes : int
+    {field} + time_sec : float
+    {field} + peak_memory_mb : float
+  }
+  abstract class SearchProblem <<ABC>> {
+    + {abstract} initial_state() : State  <<property>>
+    + {abstract} is_goal(state) : bool
+    + {abstract} get_successors(state) : List[Tuple[Action, State, int]]
+  }
+}
+
+package "uninformed.py" as P_unin {
+  class BFS {
+    + solve(problem) : SolverResult
+    .. cách hoạt động ..
+    {field} deque (FIFO) + visited set
+    {field} lời giải ít bước nhất
+  }
+  class "DFS" as DFS <<IDS>> {
+    + solve(problem) : SolverResult
+    .. cách hoạt động ..
+    {field} DFS giới hạn độ sâu 0, 1, 2, ...
+    {field} chống lặp: state trên đường đi
+  }
+  class UCS {
+    + solve(problem) : SolverResult
+    .. cách hoạt động ..
+    {field} heapq theo g
+    {field} lăn = 1, lên fragile = 3
+    {field} đổi cầu = 2, SPACE = 0
+  }
+  class uninformed <<module>> {
+    + save_path(node) : List[str]
+  }
+}
+
+package "astar.py" as P_astar {
+  class AStar {
+    {field} + heuristic : Callable
+    + __init__(heuristic = heuristic_manhattan)
+    + solve(problem) : SolverResult
+    .. cách hoạt động ..
+    {field} heapq theo (f, h, thứ tự)
+    {field} closed set + best_g
+    {field} goal test khi lấy ra khỏi heap
+  }
+  class heuristics <<module>> {
+    + heuristic_manhattan(state, problem, split_cells) : float
+    + heuristic_zero(state, problem, split_cells) : float
+    - _rolls_lower_bound(cells, target) : int
+    - _split_switch_cells(problem) : Tuple[Coord, ...]
+    .. công thức ..
+    {field} h = min( ceil(D_goal/2), min_s ceil(D_s/2) )
+    {field} D = Manhattan lớn nhất từ các ô khối
+    {field} s = các split switch (teleport)
+    {field} admissible + consistent
+  }
+}
+
+package "profiler.py" as P_prof {
+  class profiler <<module>> {
+    + run_with_profiler(solve_func) : SolverResult
+    .. đo ..
+    {field} time.perf_counter() + tracemalloc
+  }
+}
+
+package "benchmark.py" as P_bench {
+  class benchmark <<module>> {
+    {field} + TEST_SUITE : Dict[str, List[str]]
+    + run_one(stage, solver, time_limit) : dict
+    + run_benchmarks(time_limit, output_csv) : Path
+    + plot_results(csv_path) : List[Path]
+    + main()
+    .. cách hoạt động ..
+    {field} mỗi lần chạy = 1 process (spawn): timeout, đo bộ nhớ độc lập
+    {field} xuất data/benchmark_results.csv, data/chart_*.png
+  }
+}
+
+package "engine" as P_engine {
+  class BloxorzProblem
+  class SearchNode <<frozen dataclass>>
+}
+
+SearchSolver <|-- BFS
+SearchSolver <|-- DFS
+SearchSolver <|-- UCS
+SearchSolver <|-- AStar
+SearchSolver ..> SolverResult : returns
+SearchProblem <|.. BloxorzProblem : duck typing\n(không kế thừa trực tiếp)
+AStar ..> heuristics : h(n)
+AStar ..> uninformed : save_path
+
+P_unin ..> P_prof : solve() bọc trong\nrun_with_profiler
+P_astar ..> P_prof
+P_unin ..> P_engine : tạo SearchNode,\ngọi get_successors
+P_astar ..> P_engine
+P_bench ..> P_contract : chạy 4 SearchSolver
+P_bench ..> P_engine : load_stage, BloxorzProblem
+
+P_contract -[hidden]down- P_unin
+P_unin -[hidden]down- P_prof
+@enduml
