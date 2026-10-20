@@ -8,7 +8,7 @@ from src.engine.problem import BloxorzProblem, GameSession
 from src.engine.state import Action, GameState, Orientation
 from src.gui.animation import RollAnimation
 from src.gui.replay import PathReplay
-from src.gui.renderer3d import IsometricRenderer
+from src.gui.renderer3d import IsometricRenderer, VIEWS
 from src.gui.solver_gateway import ProcessSolverGateway
 from src.gui.contracts import SolverRequest, SolverStatus, ReplayStatus
 from src.gui import theme
@@ -389,7 +389,9 @@ class BloxorzApp:
             if speed not in (0.5, 1, 2, 4):
                 raise ValueError('Invalid playback speed.')
             view = settings.get('view', self.renderer.view)
-            if view not in ('front', 'iso'):
+            if view == 'front':  # removed view; older saves fall back to the default
+                view = VIEWS[0]
+            if view not in VIEWS:
                 raise ValueError('Invalid camera view.')
         except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
             self.message = f'Load failed: {error}'
@@ -554,10 +556,9 @@ class BloxorzApp:
         elif key == 'load': self.load()
         elif key == 'camera': self.zoom, self.pan = 1.0, [0, 0]
         elif key == 'view':
-            view = 'iso' if self.renderer.view == 'front' else 'front'
+            view = VIEWS[(VIEWS.index(self.renderer.view) + 1) % len(VIEWS)]
             self.renderer.set_view(view)
-            self.message = ('Front view: Up = away, Down = toward you.' if view == 'front'
-                            else 'Classic isometric view.')
+            self.message = {'original': 'Original game view.', 'iso': 'Classic isometric view.'}[view]
         elif key == 'animate':
             self.animate = not self.animate
             if not self.animate: self.animation.reset()

@@ -454,7 +454,7 @@ def test_fall_frames_render_and_view_toggle(tmp_path):
     pygame.init()
     app = app_fixture()
     surface = pygame.Surface((760, 600))
-    for view in ('front', 'iso'):
+    for view in ('original', 'iso'):
         app.renderer.set_view(view)
         assert app.renderer.camera.view == view
         before = app.session.current_state
@@ -463,7 +463,7 @@ def test_fall_frames_render_and_view_toggle(tmp_path):
             app.renderer.draw(surface, before, MotionFrame(before, fallen, Action.UP, progress, True))
         pygame.image.save(surface, str(tmp_path / f'fall_{view}.png'))
     app.command('view')
-    assert app.renderer.view == 'front'
+    assert app.renderer.view == 'original'  # V toggles original <-> iso
     pygame.quit()
 
 
@@ -535,3 +535,21 @@ def test_sound_events_follow_gameplay():
     for action in solution(app):
         app.apply_action(action)
     assert app.sound.log[-1] == 'win' and app.sound.log.count('roll') >= 1
+
+
+def test_fragile_tile_breaks_when_block_stands_on_it():
+    pygame.init()
+    app = app_fixture()
+    app.select_stage(3)  # stage 04 has fragile tiles
+    before = GameState((5, 7), (5, 8), Orientation.LYING_H, 0, ())
+    fallen = app.session.problem.fall_result(before, Action.RIGHT)
+    assert fallen.orientation == Orientation.STANDING and fallen.pos1 == (5, 9)
+    renderer = app.renderer
+    assert renderer._broken_tile(fallen) == (5, 9)
+    assert renderer._broken_tile(before) is None  # lying blocks never break tiles
+    surface = pygame.Surface((760, 600))
+    renderer.draw(surface, before, MotionFrame(before, fallen, Action.RIGHT, .1, True))
+    assert renderer._static_key[-1] is None  # still rolling onto the tile
+    renderer.draw(surface, before, MotionFrame(before, fallen, Action.RIGHT, .6, True))
+    assert renderer._static_key[-1] == (5, 9)  # the board is rebuilt without it
+    pygame.quit()

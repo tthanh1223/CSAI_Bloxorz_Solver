@@ -265,14 +265,14 @@ def _draw(app):
                     ('text', 'Large text', app.large_text))):
                 label(title, xx, yy + 72 + i * 48)
                 button(key, 'On' if enabled else 'Off', r.right - 120, yy + 64 + i * 48, 88, selected=enabled)
-            view_label = 'View: Front' if app.renderer.view == 'front' else 'View: Classic'
+            view_label = 'View: Original' if app.renderer.view == 'original' else 'View: Classic'
             button('view', view_label + ' · V', xx, r.bottom - 120, 200, kind='quiet')
             button('camera', 'Reset camera', xx + 216, r.bottom - 120, 200, kind='quiet')
             button('recording', 'Replay my moves', xx, r.bottom - 64, 416, idle and bool(app.actions), 'quiet')
         else:
             lines = ['Stand the block upright in the dark goal.', 'Arrows / WASD: roll · Space: switch cube',
                      'Z: undo · R: restart · Esc: close menu', 'Scroll: zoom · Right-drag: pan the camera',
-                     'V: front / classic view · Falling off restarts',
+                     'V: switch camera view · Falling off restarts',
                      'Circle: soft switch · X: heavy switch', 'Brackets: split switch · Crack: fragile tile',
                      'Outlined bridge: off · Light cube: active']
             for i, line in enumerate(lines):

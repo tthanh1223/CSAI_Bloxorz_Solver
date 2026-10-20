@@ -19,16 +19,57 @@ FACES = ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
 
 # ---------------------------------------------------------------------------
 # Camera views
-#   'front': camera stands behind the board (the "south" side) and looks ahead.
-#            UP = away from you (up on screen), DOWN = toward you,
-#            LEFT/RIGHT = left/right on screen. Easiest to control.
 #   'iso'  : classic isometric view of the original game. Every arrow key moves
 #            the block diagonally on screen.
+#   'original': default. The original Flash game's camera: front-left and
+#            high, with real perspective (far tiles get smaller), so boards
+#            split into islands clearly lie on one ground plane. Rows run
+#            almost level and the board's left and front sides show.
+#            UP = away from you, LEFT/RIGHT = left/right on screen.
 # ---------------------------------------------------------------------------
-VIEWS = ('front', 'iso')
-FRONT_SHEAR = 0.3   # far rows shift right a little, so the block's side face shows
-FRONT_DEPTH = 0.55  # screen height of one row, as a fraction of tile width
-HEIGHT_SCALE = 0.6  # one unit of block height = 0.6 * tile width (see project())
+VIEWS = ('original', 'iso')
+DEFAULT_VIEW = 'original'
+HEIGHT_SCALE = 0.6  # 'iso': one unit of block height = 0.6 * tile width (see project())
+
+# 'original' perspective camera, aimed at the board centre.
+# Tuned against a screenshot of the Flash game's stage 1.
+ORIGINAL_YAW = 0.2        # radians the camera stands to the left of straight-in-front
+ORIGINAL_PITCH = 0.58     # radians the camera looks down (~33 degrees)
+ORIGINAL_DISTANCE = 2.5   # distance from the board centre, in board sizes (smaller = stronger perspective)
+ORIGINAL_HEIGHT = 1.0     # one block unit of height, in tile widths
+
+
+def height_scale(view: str) -> float:
+    return ORIGINAL_HEIGHT if view == 'original' else HEIGHT_SCALE
+
+
+def perspective_eye(row: float, col: float, distance: float) -> tuple:
+    """Camera pose looking at (row, col, 0): position, right, up, forward.
+
+    World axes: x = col (right), y = row (toward the viewer), z = up.
+    """
+    ch, sh = cos(ORIGINAL_PITCH), sin(ORIGINAL_PITCH)
+    position = (col - distance * ch * sin(ORIGINAL_YAW), row + distance * ch * cos(ORIGINAL_YAW), distance * sh)
+    forward = tuple((t - p) / distance for t, p in zip((col, row, 0), position))
+    right = (-forward[1], forward[0], 0)  # world up x forward
+    length = (right[0] ** 2 + right[1] ** 2) ** .5
+    right = (right[0] / length, right[1] / length, 0)
+    up = (forward[1] * right[2] - forward[2] * right[1],  # forward x right
+          forward[2] * right[0] - forward[0] * right[2],
+          forward[0] * right[1] - forward[1] * right[0])
+    return position + right + up + forward
+
+
+def perspective_raw(eye, row: float, col: float, z: float) -> tuple[float, float, float]:
+    """Pinhole projection with focal length 1: (x, y, distance along the view).
+
+    eye comes from perspective_eye(); screen y grows downward; z is in block units.
+    """
+    v = (col - eye[0], row - eye[1], z * ORIGINAL_HEIGHT - eye[2])
+    x = sum(a * b for a, b in zip(v, eye[3:6]))
+    y = sum(a * b for a, b in zip(v, eye[6:9]))
+    forward = max(1e-3, sum(a * b for a, b in zip(v, eye[9:12])))
+    return x / forward, -y / forward, forward
 
 
 @dataclass(frozen=True)
@@ -37,13 +78,16 @@ class Camera3D:
     tile_width: float = 54
     tile_depth: float = 27
     tile_height: float = 12
-    view: str = 'front'
+    # The perspective camera needs a board to aim at, so the stage-less default
+    # is 'iso'; IsometricRenderer.resize() builds the real camera per stage.
+    view: str = 'iso'
+    eye: tuple = ()  # 'original' only: perspective_eye() + focal length
 
     def project(self, row: float, col: float, height: float = 0) -> tuple[float, float]:
-        """Height is in screen pixels."""
-        if self.view == 'front':
-            return (self.origin[0] + (col - row * FRONT_SHEAR) * self.tile_width,
-                    self.origin[1] + row * self.tile_depth - height)
+        """Height is in screen pixels (block units * tile_width * height_scale)."""
+        if self.view == 'original':
+            x, y, _ = perspective_raw(self.eye, row, col, height / (self.tile_width * ORIGINAL_HEIGHT))
+            return self.origin[0] + x * self.eye[12], self.origin[1] + y * self.eye[12]
         return (self.origin[0] + (col - row) * self.tile_width / 2,
                 self.origin[1] + (col + row) * self.tile_depth / 2 - height)
 
@@ -52,10 +96,10 @@ class Camera3D:
 
         It is the dot product with the projection direction, i.e. the 3D
         direction that projects onto a single screen point. For 'iso' this is
-        exactly the old key row + col + z * 5/6.
+        exactly the old key row + col + z * 5/6. For 'original' it is minus the distance in front of the camera.
         """
-        if self.view == 'front':
-            return row + FRONT_SHEAR * col + z * self.tile_depth / (HEIGHT_SCALE * self.tile_width)
+        if self.view == 'original':
+            return -perspective_raw(self.eye, row, col, z)[2]
         return row + col + z * (5 / 6)
 
 
@@ -212,7 +256,9 @@ def fall_meshes(motion: MotionFrame, tip: Tip | None) -> list[tuple[list[Point],
         return [(v, active, not split or i == motion.before.active_cube)
                 for i, (v, active) in enumerate(motion_meshes(roll))]
     t = (motion.progress - FALL_ROLL_END) / (1 - FALL_ROLL_END)
-    drop = FALL_DISTANCE * t * t
+    # Tipping over an edge starts slowly (t^2). A broken fragile tile (tip=None)
+    # gives way at once, so the block drops with some speed from the start.
+    drop = FALL_DISTANCE * (t * t if tip is not None else t * (0.4 + 0.6 * t))
     result = []
     # Two split cubes can merge in the illegal pose, so look at `after` here.
     split_after = motion.after.orientation == Orientation.SPLIT
@@ -273,6 +319,7 @@ class IsometricRenderer:
     BACKGROUND = theme.BG
     FLOOR = theme.FLOOR
     BLOCK = theme.BLOCK
+    FRAGILE = (202, 167, 145)
 
     def __init__(self, camera: Camera3D | None = None):
         self.camera = camera or Camera3D()
@@ -281,7 +328,7 @@ class IsometricRenderer:
         self.bridge_cells = {}
         self.zoom = 1.0
         self.pan = (0, 0)
-        self.view = 'front'
+        self.view = DEFAULT_VIEW
         self.high_contrast = False
         rng=random.Random(103)
         self.flecks=[(rng.uniform(.04,.94),rng.uniform(.04,.94),rng.uniform(.012,.038),rng.randrange(5)) for _ in range(75)]
@@ -303,7 +350,7 @@ class IsometricRenderer:
         self.material_cache.clear()
 
     def set_view(self, view: str) -> None:
-        """Switch camera view ('front' or 'iso') and refit the board."""
+        """Switch camera view (one of VIEWS) and refit the board."""
         if view not in VIEWS:
             raise ValueError(f'Unknown view: {view!r}')
         self.view = view
@@ -316,17 +363,20 @@ class IsometricRenderer:
         cells = [(r, c) for r, row in enumerate(self.stage.grid) for c, tile in enumerate(row)
                  if tile != TileType.VOID or (r, c) in self.bridge_cells]
         cells = cells or [(0, 0)]
-        if self.view == 'front':
-            # Fit in units of tile width: x = col - row*shear, y = row*depth - z*0.6.
+        if self.view == 'original':
             corners = [(r + dr, c + dc) for r, c in cells for dr in (0, 1) for dc in (0, 1)]
-            xs = [c - r * FRONT_SHEAR for r, c in corners]
-            ys = [r * FRONT_DEPTH + dz for r, _ in corners
-                  for dz in (-2.2 * HEIGHT_SCALE, .45 * HEIGHT_SCALE)]  # standing block .. tile side
-            width = max(2, min(112, size[0] * .88 / (max(xs) - min(xs)),
-                                size[1] * .88 / (max(ys) - min(ys))))
-            origin = (size[0] / 2 - (min(xs) + max(xs)) * width / 2,
-                      size[1] / 2 - (min(ys) + max(ys)) * width / 2)
-            self.camera = Camera3D(origin, width, width * FRONT_DEPTH, width * .24, 'front')
+            rows = [r for r, _ in corners];cols = [c for _, c in corners]
+            distance = ORIGINAL_DISTANCE * max(max(rows) - min(rows), max(cols) - min(cols), 4)
+            eye = perspective_eye((min(rows) + max(rows)) / 2, (min(cols) + max(cols)) / 2, distance)
+            points = [perspective_raw(eye, r, c, z) for r, c in corners
+                      for z in (-.45, 2.2)]  # tile side .. standing block
+            xs = [p[0] for p in points];ys = [p[1] for p in points]
+            focal = min(size[0] * .88 / (max(xs) - min(xs)), size[1] * .88 / (max(ys) - min(ys)))
+            focal = max(2 * distance, min(112 * distance, focal))  # tile width 2..112 px at the centre
+            origin = (size[0] / 2 - (min(xs) + max(xs)) * focal / 2,
+                      size[1] / 2 - (min(ys) + max(ys)) * focal / 2)
+            width = focal / distance  # tile width at the board centre, for markers and moss
+            self.camera = Camera3D(origin, width, width / 2, width * .24, 'original', eye + (focal,))
             return
         xs = [(c - r + delta) / 2 for r, c in cells for delta in (-1, 1)]
         ys = [(r + c) / 4 + delta for r, c in cells for delta in (-1.38, .68)]
@@ -337,7 +387,8 @@ class IsometricRenderer:
         self.camera = Camera3D(origin, width, width / 2, width * .24, 'iso')
 
     def project(self, point: Point) -> tuple[float, float]:
-        x, y = self.camera.project(point[0], point[1], point[2] * self.camera.tile_width * 0.6)
+        x, y = self.camera.project(point[0], point[1],
+                                   point[2] * self.camera.tile_width * height_scale(self.camera.view))
         return ((x - self.size[0] / 2) * self.zoom + self.size[0] / 2 + self.pan[0],
                 (y - self.size[1] / 2) * self.zoom + self.size[1] / 2 + self.pan[1])
 
@@ -384,12 +435,14 @@ class IsometricRenderer:
             result.append((depth, projected, shaded, outline))
         return result
 
-    def _build_static(self, shown):
-        """Bake only on stage / bridge / camera / contrast changes."""
+    def _build_static(self, shown, broken=None):
+        """Bake only on stage / bridge / camera / contrast changes.
+
+        broken: a fragile tile that has just broken; it is left out of the board,
+        so it vanishes and the block drops through the hole."""
         self.stats['static_builds']+=1
         self._base=pygame.Surface(self.size,pygame.SRCALPHA)
         self._top_mask=pygame.Surface(self.size,pygame.SRCALPHA)
-        shadow=pygame.Surface(self.size,pygame.SRCALPHA)
         commands=[]
         holes=[]
         tile_outlines=[]
@@ -400,13 +453,12 @@ class IsometricRenderer:
                     if bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
                         pts=[self.project(p) for p in cuboid(r,c,-.12,1,1,0)[:4]]
                         commands.append((self.camera.depth(r+.5,c+.5,0),'outline',pts));continue
-                elif tile==TileType.VOID:continue
+                elif tile==TileType.VOID or coord==broken:continue
                 top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
                 tile_outlines.append(top)
                 pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
-                pygame.draw.polygon(shadow,(101,55,85,68),[(x-24*self.zoom,y+40*self.zoom) for x,y in top])
                 color=(112,145,151) if bridge is not None else ((178,200,193) if self.high_contrast else self.FLOOR)
-                if tile==TileType.FRAGILE:color=(202,167,145)
+                if tile==TileType.FRAGILE:color=self.FRAGILE
                 vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.24,.976,.976,.24),.018)
                 for depth,pts,ink,edge in self._faces(vertices,color,faces=indices):
                     commands.append((depth,'face',(pts,ink)))
@@ -417,8 +469,6 @@ class IsometricRenderer:
                 if coord==self.stage.goal:
                     holes.append([self.project(p) for p in cuboid(r+.16,c+.16,0,.68,.68,0)[:4]])
         for hole in holes:pygame.draw.polygon(self._top_mask,(0,0,0,0),hole)
-        small=pygame.transform.smoothscale(shadow,(max(1,self.size[0]//12),max(1,self.size[1]//12)))
-        self._base.blit(pygame.transform.smoothscale(small,self.size),(0,0))
         for _,kind,payload in sorted(commands,key=lambda item:item[0]):
             if kind=='face':
                 pts,ink=payload
@@ -447,6 +497,16 @@ class IsometricRenderer:
         if bridge is not None:
             return bridge < len(bridges_status) and bridges_status[bridge]
         return grid[r][c] != TileType.VOID
+
+    def _broken_tile(self, pose: GameState) -> tuple[int, int] | None:
+        """The fragile tile under a block standing upright on it (it breaks), else None."""
+        if self.stage is None or pose.orientation != Orientation.STANDING:
+            return None
+        r, c = pose.pos1
+        grid = self.stage.grid
+        if 0 <= r < len(grid) and 0 <= c < len(grid[r]) and grid[r][c] == TileType.FRAGILE:
+            return (r, c)
+        return None
 
     def _tip(self, pose: GameState, action: Action) -> Tip | None:
         """Which edge the falling block topples over (see tip_mesh).
@@ -550,10 +610,13 @@ class IsometricRenderer:
         if self.stage is None:
             surface.fill((0,0,0,0) if surface.get_flags()&pygame.SRCALPHA else self.BACKGROUND);return
         shown=motion.before if motion and motion.progress<.65 else state
-        static_key=(self.size,self.camera,self.zoom,tuple(self.pan),self.high_contrast,shown.bridges_status)
+        # Once the block stops rolling onto a fragile tile, that tile breaks.
+        broken=(self._broken_tile(motion.after)
+                if motion and motion.falling and motion.progress>=FALL_ROLL_END else None)
+        static_key=(self.size,self.camera,self.zoom,tuple(self.pan),self.high_contrast,shown.bridges_status,broken)
         if static_key!=self._static_key:
             self.material_cache.clear()
-            self._build_static(shown);self._static_key=static_key
+            self._build_static(shown,broken);self._static_key=static_key
         key=(state,motion,static_key)
         if key!=self._frame_key:
             self.stats['dynamic_frames']+=1
@@ -567,13 +630,18 @@ class IsometricRenderer:
                 # What is below the board top is drawn first and the board is
                 # blitted over it, so the board hides the block wherever it is in
                 # front of it (parallel projection makes this exact).
-                # Tipping away from the viewer (direction -1: back / left), each
+                # Tipping away from the viewer (depth shrinks along the tip), each
                 # face is cut at the board top: drawing a face that straddles it
                 # on top would show the block through the board. Tipping toward
                 # the viewer, the board is behind the block, so only faces fully
                 # below the top go underneath (cutting there would let the
                 # board's thick front side cover the block).
-                away=tip is not None and tip[1]<0
+                # A straight drop through a broken tile is cut like the goal sink:
+                # the tiles around the hole hide what has gone below the top.
+                away=tip is None
+                if tip is not None:
+                    step=[0,0];step[tip[0]]=tip[1]
+                    away=self.camera.depth(step[0],step[1],0)<self.camera.depth(0,0,0)
                 under=[]
                 for vertices,active,moving in tagged:
                     if not moving:continue
