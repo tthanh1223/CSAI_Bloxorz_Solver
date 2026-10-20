@@ -65,10 +65,13 @@ def perspective_raw(eye, row: float, col: float, z: float) -> tuple[float, float
 
     eye comes from perspective_eye(); screen y grows downward; z is in block units.
     """
-    v = (col - eye[0], row - eye[1], z * ORIGINAL_HEIGHT - eye[2])
-    x = sum(a * b for a, b in zip(v, eye[3:6]))
-    y = sum(a * b for a, b in zip(v, eye[6:9]))
-    forward = max(1e-3, sum(a * b for a, b in zip(v, eye[9:12])))
+    # Dot products written out by hand: this runs ~100k times per board rebuild.
+    vx, vy, vz = col - eye[0], row - eye[1], z * ORIGINAL_HEIGHT - eye[2]
+    x = vx * eye[3] + vy * eye[4] + vz * eye[5]
+    y = vx * eye[6] + vy * eye[7] + vz * eye[8]
+    forward = vx * eye[9] + vy * eye[10] + vz * eye[11]
+    if forward < 1e-3:
+        forward = 1e-3
     return x / forward, -y / forward, forward
 
 
@@ -333,6 +336,7 @@ class IsometricRenderer:
         rng=random.Random(103)
         self.flecks=[(rng.uniform(.04,.94),rng.uniform(.04,.94),rng.uniform(.012,.038),rng.randrange(5)) for _ in range(75)]
         self.material_cache={}
+        self._material_key=None
         self._static_key=None
         self._frame_key=None
         self._block_textures={}
@@ -614,8 +618,13 @@ class IsometricRenderer:
         broken=(self._broken_tile(motion.after)
                 if motion and motion.falling and motion.progress>=FALL_ROLL_END else None)
         static_key=(self.size,self.camera,self.zoom,tuple(self.pan),self.high_contrast,shown.bridges_status,broken)
+        # Tile texture stamps only depend on each tile's on-screen shape, so they
+        # survive bridge toggles, broken tiles and panning (pan moves whole pixels).
+        # Only a new camera / zoom / size / look makes them stale.
+        material_key=(self.size,self.camera,self.zoom,self.high_contrast,self.style)
+        if material_key!=self._material_key:
+            self.material_cache.clear();self._material_key=material_key
         if static_key!=self._static_key:
-            self.material_cache.clear()
             self._build_static(shown,broken);self._static_key=static_key
         key=(state,motion,static_key)
         if key!=self._frame_key:
@@ -703,7 +712,7 @@ class IsometricRenderer:
         if stamp is None:
             stamp=pygame.Surface((max(1,ceil(max(p[0] for p in local))+1),max(1,ceil(max(p[1] for p in local))+1)),pygame.SRCALPHA)
             self._paint_material(stamp,local,color)
-            if len(self.material_cache)>768:self.material_cache.clear()
+            if len(self.material_cache)>3000:self.material_cache.clear()  # ~1 large board + its bridges
             self.material_cache[key]=stamp
         surface.blit(stamp,(x,y))
 
