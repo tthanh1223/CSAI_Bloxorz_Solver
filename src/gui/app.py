@@ -46,7 +46,7 @@ def read_state(data):
 
 
 class BloxorzApp:
-    WINDOW_SIZE = (1180, 800)
+    WINDOW_SIZE = (1080, 620)
     FALL_SECONDS = 0.9  # roll to the edge, tip over and drop, then restart
     WIN_SECONDS = 0.8   # sink into the goal hole, then load the next stage
 
@@ -536,6 +536,7 @@ class BloxorzApp:
             self.solve_current = not self.solve_current
         elif key == 'solution' and self.result and self.result.found and not self.busy:
             self.load_replay(self.solve_start, self.result.path)
+            self.replay.play()
         elif key == 'recording' and self.actions and not self.busy:
             self.load_replay(self.record_start, tuple(self.actions))
         elif key == 'play' and not self.busy:
@@ -565,7 +566,20 @@ class BloxorzApp:
         elif key == 'sound':
             if self.sound is None:
                 self.message = 'Audio device unavailable.'
-            else: self.sound_enabled = not self.sound_enabled
+            else:
+                self.sound_enabled = not self.sound_enabled
+                if pygame.mixer.get_init():
+                    if self.sound_enabled:
+                        try:
+                            pygame.mixer.music.unpause()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            pygame.mixer.music.pause()
+                        except Exception:
+                            pass
+
         elif key == 'contrast': self.high_contrast = not self.high_contrast
         elif key == 'text': self.large_text = not self.large_text
 
@@ -605,13 +619,28 @@ class BloxorzApp:
     def run(self):
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
-        self.screen = pygame.display.set_mode(self.WINDOW_SIZE, pygame.RESIZABLE)
+        # Responsive window sizing: adapt to screen height so UI never overflows below taskbar
+        info = pygame.display.Info()
+        sw = info.current_w or 1280
+        sh = info.current_h or 720
+        target_w = min(self.WINDOW_SIZE[0], max(theme.MIN_SIZE[0], sw - 40))
+        target_h = min(self.WINDOW_SIZE[1], max(theme.MIN_SIZE[1], sh - 80))
+        self.screen = pygame.display.set_mode((target_w, target_h), pygame.RESIZABLE)
         pygame.display.set_caption('Bloxorz 3D - Search Lab')
         self.font = pygame.font.Font(None, 28)
         self.title_font = pygame.font.Font(None, 38)
         if pygame.mixer.get_init():
             from src.gui.sfx import SoundBank
             self.sound = SoundBank()
+            bgm_path = ROOT / 'assets' / 'bgm' / 'ambient_zen.wav'
+            if bgm_path.exists():
+                try:
+                    pygame.mixer.music.load(str(bgm_path))
+                    pygame.mixer.music.set_volume(0.28)
+                    pygame.mixer.music.play(-1)
+                except Exception:
+                    pass
+
         clock = pygame.time.Clock()
         try:
             running = True

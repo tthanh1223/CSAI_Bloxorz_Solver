@@ -722,21 +722,24 @@ class IsometricRenderer:
             self._stone_material(surface,points,color)
             return
         a,b,_,d=points
-        warm=color[0]>color[1]*1.12
-        palette=((248,242,218),(170,152,177),(186,198,183),(240,211,183),(251,247,229))
-        if self.style=='blueprint':
-            rng=random.Random(92)
+        warm = color[0] > color[1] * 1.12
+        # Rich Monument Valley terrazzo palette: quartz, amethyst purple, coral pink, terracotta, deep plum
+        palette = ((253, 251, 247), (107, 91, 130), (226, 141, 122), (232, 162, 120), (74, 59, 88))
+        if self.style == 'blueprint':
+            rng = random.Random(92)
             # Fine fibers and paper grain, without terrazzo inclusions.
             for _ in range(140):
-                u,v=rng.uniform(.02,.98),rng.uniform(.02,.98)
-                p=(a[0]+(b[0]-a[0])*u+(d[0]-a[0])*v,a[1]+(b[1]-a[1])*u+(d[1]-a[1])*v)
-                delta=rng.choice((-9,-5,4,8))
-                pygame.draw.line(surface,tuple(max(0,min(255,c+delta)) for c in color),p,(p[0]+rng.uniform(.5,1.5),p[1]))
+                u, v = rng.uniform(.02, .98), rng.uniform(.02, .98)
+                p = (a[0] + (b[0] - a[0]) * u + (d[0] - a[0]) * v, a[1] + (b[1] - a[1]) * u + (d[1] - a[1]) * v)
+                delta = rng.choice((-9, -5, 4, 8))
+                pygame.draw.line(surface, tuple(max(0, min(255, c + delta)) for c in color), p, (p[0] + rng.uniform(.5, 1.5), p[1]))
             return
-        for u,v,s,index in self.flecks:
-            def at(x,y):return (a[0]+(b[0]-a[0])*x+(d[0]-a[0])*y,a[1]+(b[1]-a[1])*x+(d[1]-a[1])*y)
-            ink=tuple(min(255,max(0,c+(7 if index%2 else -8))) for c in color) if warm else tuple(int(c*.25+p*.75) for c,p in zip(color,palette[index]))
-            pygame.draw.polygon(surface,ink,[at(u,v),at(u+s,v+s*.2),at(u+s*.4,v+s),at(u-s*.3,v+s*.5)])
+        for u, v, s, index in self.flecks:
+            def at(x, y):
+                return (a[0] + (b[0] - a[0]) * x + (d[0] - a[0]) * y, a[1] + (b[1] - a[1]) * x + (d[1] - a[1]) * y)
+            ink = tuple(min(255, max(0, c + (7 if index % 2 else -8))) for c in color) if warm else palette[index % len(palette)]
+            pygame.draw.polygon(surface, ink, [at(u, v), at(u + s, v + s * .2), at(u + s * .4, v + s), at(u - s * .3, v + s * .5)])
+
 
     def _stone_material(self,surface,points,color):
         width,height=surface.get_size()

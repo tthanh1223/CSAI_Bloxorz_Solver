@@ -5,11 +5,62 @@ from src.gui import theme as T
 
 NAMES={'dream':'Dream City','blueprint':'Paper Blueprint','forest':'Forest Ruins'}
 KEYS=('BG','PANEL','SURFACE','HOVER','PRESSED','TEXT','MUTED','DISABLED','LINE','ACCENT','ACCENT_HOVER','INK','FLOOR','BLOCK')
-DREAM=tuple(getattr(T,key) for key in KEYS)
-PALETTES={
- 'dream':DREAM,
- 'blueprint':((10,35,53),(13,38,55),(24,49,66),(35,65,81),(40,70,85),(248,237,216),(161,183,190),(107,133,148),(69,99,118),(246,175,54),(255,192,75),(15,36,48),(234,221,196),(205,181,137)),
- 'forest':((34,47,39),(19,31,25),(40,54,44),(55,70,48),(63,79,52),(239,235,205),(181,191,160),(113,129,107),(75,91,72),(220,186,91),(240,208,111),(27,37,25),(164,170,146),(222,173,62))}
+DREAM = (
+    (243, 196, 192),  # BG
+    (255, 248, 244),  # PANEL
+    (250, 237, 233),  # SURFACE
+    (246, 222, 216),  # HOVER
+    (238, 206, 201),  # PRESSED
+    (86, 56, 74),     # TEXT
+    (132, 98, 116),   # MUTED
+    (186, 160, 172),  # DISABLED
+    (235, 212, 210),  # LINE
+    (236, 138, 92),   # ACCENT (warm coral terracotta)
+    (248, 158, 114),  # ACCENT_HOVER
+    (255, 252, 248),  # INK
+    (210, 229, 225),  # FLOOR (celadon mint terrazzo #D2E5E1)
+    (232, 162, 120),  # BLOCK (warm sunlit terracotta #E8A278)
+)
+
+BLUEPRINT = (
+    (14, 30, 46),     # BG (matte navy drafting paper #0E1E2E)
+    (18, 42, 64),     # PANEL
+    (26, 54, 78),     # SURFACE
+    (38, 72, 102),    # HOVER
+    (46, 84, 116),    # PRESSED
+    (248, 242, 230),  # TEXT (crisp technical white)
+    (152, 185, 200),  # MUTED
+    (82, 112, 132),   # DISABLED
+    (48, 86, 114),    # LINE (cyan drafting grid)
+    (216, 88, 32),    # ACCENT (vibrant architectural terracotta #D85820)
+    (238, 110, 52),   # ACCENT_HOVER
+    (255, 255, 255),  # INK
+    (234, 228, 211),  # FLOOR (warm off-white cardstock #EAE4D3)
+    (216, 88, 32),    # BLOCK (vibrant terracotta orange #D85820)
+)
+
+FOREST = (
+    (24, 36, 28),     # BG (deep emerald jungle canopy)
+    (18, 28, 22),     # PANEL
+    (34, 48, 38),     # SURFACE
+    (48, 66, 52),     # HOVER
+    (58, 78, 62),     # PRESSED
+    (242, 238, 214),  # TEXT (ivory rune #EFEBD0)
+    (168, 184, 152),  # MUTED
+    (96, 114, 90),    # DISABLED
+    (58, 78, 60),     # LINE
+    (201, 164, 59),   # ACCENT (antique relic gold #C9A43B)
+    (226, 188, 82),   # ACCENT_HOVER
+    (18, 28, 20),     # INK
+    (106, 115, 99),   # FLOOR (chiseled limestone slab #6A7363)
+    (201, 164, 59),   # BLOCK (weathered antique gold relic #C9A43B)
+)
+
+PALETTES = {
+    'dream': DREAM,
+    'blueprint': BLUEPRINT,
+    'forest': FOREST,
+}
 
 
 def apply_theme(app,name):
