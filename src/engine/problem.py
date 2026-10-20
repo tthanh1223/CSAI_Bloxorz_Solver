@@ -130,6 +130,22 @@ class BloxorzProblem:
         
         return GameState(new_pos1, new_pos2, new_ori, new_active, state.bridges_status)
 
+    def fall_result(self, state: GameState, action: Action) -> GameState | None:
+        """Trả về tư thế khối ngay lúc rơi nếu `action` làm khối rơi, ngược lại trả về None.
+
+        Một nước lăn bị engine từ chối (lăn ra void, ra ngoài bảng, lên cầu đang đóng,
+        đứng thẳng trên ô fragile, hoặc switch đóng cầu ngay dưới khối) nghĩa là khối rơi.
+        Hàm này chỉ dùng cho GUI; solver vẫn chỉ đi qua get_successors() như cũ.
+        """
+        if action == Action.SPACE:
+            return None
+        moved = self.roll_block(state, action)
+        if moved is None:
+            return None
+        if any(valid_action == action for valid_action, _, _ in self.get_successors(state)):
+            return None
+        return moved
+
     def check_validity(self, state: GameState) -> bool:
         """Check that every occupied cell is supported by the current stage."""
         occupied = set(self._blocks_for_state(state))
@@ -221,8 +237,22 @@ class GameSession:
                     self.status = "WON"
                 return True
                 
-        # Nước đi làm rớt vực hoặc không hợp lệ -> FSM không trả về -> Giữ nguyên (hoặc cho thua tùy luật)
+        # Nước đi làm rớt vực hoặc không hợp lệ -> FSM không trả về -> Giữ nguyên state.
+        # Muốn xử lý thua (rơi) thì gọi fall() thay vì bỏ qua nước đi.
         return False
+
+    def fall(self, action: Action) -> GameState | None:
+        """Nếu action làm khối rơi: đặt status = "LOST" và trả về tư thế lúc rơi.
+
+        current_state giữ nguyên (khối chưa bao giờ đứng được ở tư thế rơi),
+        nên restart() hoặc undo() đều đưa game về trạng thái hợp lệ.
+        """
+        if self.status != "PLAYING":
+            return None
+        fallen = self.problem.fall_result(self.current_state, action)
+        if fallen is not None:
+            self.status = "LOST"
+        return fallen
 
     def undo(self):
         """Quay lại nước đi trước đó"""

@@ -17,17 +17,46 @@ FACES = ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
          (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7))
 
 
+# ---------------------------------------------------------------------------
+# Camera views
+#   'front': camera stands behind the board (the "south" side) and looks ahead.
+#            UP = away from you (up on screen), DOWN = toward you,
+#            LEFT/RIGHT = left/right on screen. Easiest to control.
+#   'iso'  : classic isometric view of the original game. Every arrow key moves
+#            the block diagonally on screen.
+# ---------------------------------------------------------------------------
+VIEWS = ('front', 'iso')
+FRONT_SHEAR = 0.3   # far rows shift right a little, so the block's side face shows
+FRONT_DEPTH = 0.55  # screen height of one row, as a fraction of tile width
+HEIGHT_SCALE = 0.6  # one unit of block height = 0.6 * tile width (see project())
+
+
 @dataclass(frozen=True)
 class Camera3D:
     origin: tuple[float, float] = (360, 120)
     tile_width: float = 54
     tile_depth: float = 27
     tile_height: float = 12
+    view: str = 'front'
 
     def project(self, row: float, col: float, height: float = 0) -> tuple[float, float]:
         """Height is in screen pixels."""
+        if self.view == 'front':
+            return (self.origin[0] + (col - row * FRONT_SHEAR) * self.tile_width,
+                    self.origin[1] + row * self.tile_depth - height)
         return (self.origin[0] + (col - row) * self.tile_width / 2,
                 self.origin[1] + (col + row) * self.tile_depth / 2 - height)
+
+    def depth(self, row: float, col: float, z: float) -> float:
+        """Painter's-algorithm key: larger = closer to the viewer, drawn later.
+
+        It is the dot product with the projection direction, i.e. the 3D
+        direction that projects onto a single screen point. For 'iso' this is
+        exactly the old key row + col + z * 5/6.
+        """
+        if self.view == 'front':
+            return row + FRONT_SHEAR * col + z * self.tile_depth / (HEIGHT_SCALE * self.tile_width)
+        return row + col + z * (5 / 6)
 
 
 def cuboid(r, c, z, rows, cols, height) -> list[Point]:
@@ -139,6 +168,107 @@ def motion_meshes(motion: MotionFrame) -> list[tuple[list[Point], bool]]:
     return rotated
 
 
+FALL_ROLL_END = 0.3   # first 30% of a fall: the normal roll into the illegal pose
+FALL_DISTANCE = 9.0   # how far (in block units) the block drops before restart
+
+# How the block tips over an edge: (axis, direction, pivot)
+#   axis 0 = rows, 1 = cols; direction = +1/-1 toward the empty side;
+#   pivot = grid line of the board edge the block tips over.
+Tip = tuple[int, int, float]
+
+
+def tip_mesh(vertices: list[Point], tip: Tip, fraction: float) -> list[Point]:
+    """Rotate about the board edge so the part beyond it goes DOWN.
+
+    u = signed distance past the edge (toward the empty side). A point at
+    (u=1, z=0) moves to (cos a, -sin a): it drops. A point above the edge
+    (u=0, z=1) moves to (sin a, cos a): the block topples over the edge.
+    """
+    axis, direction, pivot = tip
+    angle = fraction * pi / 2
+    result = []
+    for point in vertices:
+        v = list(point)
+        u, z = (point[axis] - pivot) * direction, point[2]
+        v[axis] = pivot + (u * cos(angle) + z * sin(angle)) * direction
+        v[2] = -u * sin(angle) + z * cos(angle)
+        result.append(tuple(v))
+    return result
+
+
+def fall_meshes(motion: MotionFrame, tip: Tip | None) -> list[tuple[list[Point], bool, bool]]:
+    """Geometry of a falling block. Returns (vertices, active, moving) per mesh.
+
+    Phase 1 (progress < FALL_ROLL_END): the usual roll into the illegal pose.
+    Phase 2: the block drops with gravity (distance ~ t^2) and, if part of it
+    hangs over empty space, topples over the board edge (tip). tip=None means
+    every cell has a tile under it (a fragile tile broke): drop straight down.
+    In split mode only the active cube moves; the other cube stays put.
+    """
+    split = motion.before.orientation == Orientation.SPLIT
+    if motion.progress < FALL_ROLL_END:
+        roll = MotionFrame(motion.before, motion.after, motion.action,
+                           motion.progress / FALL_ROLL_END)
+        return [(v, active, not split or i == motion.before.active_cube)
+                for i, (v, active) in enumerate(motion_meshes(roll))]
+    t = (motion.progress - FALL_ROLL_END) / (1 - FALL_ROLL_END)
+    drop = FALL_DISTANCE * t * t
+    result = []
+    # Two split cubes can merge in the illegal pose, so look at `after` here.
+    split_after = motion.after.orientation == Orientation.SPLIT
+    for i, (vertices, active) in enumerate(state_meshes(motion.after)):
+        moving = not split_after or i == motion.after.active_cube
+        if moving:
+            if tip is not None:
+                vertices = tip_mesh(vertices, tip, min(1.0, t * 1.8))
+            vertices = [(r, c, z - drop) for r, c, z in vertices]
+        result.append((vertices, active, moving))
+    return result
+
+
+SINK_DEPTH = 2.05  # a standing block is 2 units tall: sink until fully inside
+
+
+def sink_meshes(motion: MotionFrame) -> list[tuple[list[Point], bool]]:
+    """Win animation: the block slides straight down into the goal hole.
+
+    Starts slowly and speeds up (t^2). Everything below the board top (z < 0)
+    is cut away by clip_below_floor(), so the block looks swallowed by the hole.
+    """
+    t = motion.progress
+    drop = SINK_DEPTH * t * t
+    return [([(r, c, z - drop) for r, c, z in vertices], active)
+            for vertices, active in state_meshes(motion.after)]
+
+
+def clip_below_floor(vertices: list[Point], faces, above: bool = True) -> tuple[list[Point], list[tuple[int, ...]]]:
+    """Cut every face at the board-top plane z = 0 and keep the part above it
+    (or, with above=False, the part below it).
+
+    Sutherland-Hodgman clipping against one plane: walk around each polygon,
+    keep vertices on the wanted side and add the crossing point on edges that
+    cross the plane. Faces entirely on the other side disappear.
+    """
+    def keep(point):
+        return (point[2] >= 0) == above
+
+    points, result = [], []
+    for face in faces:
+        polygon = [vertices[i] for i in face]
+        kept = []
+        for a, b in zip(polygon, polygon[1:] + polygon[:1]):
+            if keep(a):
+                kept.append(a)
+            if keep(a) != keep(b):
+                k = a[2] / (a[2] - b[2])
+                kept.append(tuple(a[i] + (b[i] - a[i]) * k for i in range(3)))
+        if len(kept) >= 3:
+            start = len(points)
+            points.extend(kept)
+            result.append(tuple(range(start, start + len(kept))))
+    return points, result
+
+
 class IsometricRenderer:
     BACKGROUND = theme.BG
     FLOOR = theme.FLOOR
@@ -151,6 +281,7 @@ class IsometricRenderer:
         self.bridge_cells = {}
         self.zoom = 1.0
         self.pan = (0, 0)
+        self.view = 'front'
         self.high_contrast = False
         rng=random.Random(103)
         self.flecks=[(rng.uniform(.04,.94),rng.uniform(.04,.94),rng.uniform(.012,.038),rng.randrange(5)) for _ in range(75)]
@@ -171,6 +302,13 @@ class IsometricRenderer:
         self._frame_key=None
         self.material_cache.clear()
 
+    def set_view(self, view: str) -> None:
+        """Switch camera view ('front' or 'iso') and refit the board."""
+        if view not in VIEWS:
+            raise ValueError(f'Unknown view: {view!r}')
+        self.view = view
+        self.resize(self.size)  # new camera -> static cache key changes -> rebuild
+
     def resize(self, size: tuple[int, int]) -> None:
         self.size = size
         if self.stage is None:
@@ -178,20 +316,35 @@ class IsometricRenderer:
         cells = [(r, c) for r, row in enumerate(self.stage.grid) for c, tile in enumerate(row)
                  if tile != TileType.VOID or (r, c) in self.bridge_cells]
         cells = cells or [(0, 0)]
+        if self.view == 'front':
+            # Fit in units of tile width: x = col - row*shear, y = row*depth - z*0.6.
+            corners = [(r + dr, c + dc) for r, c in cells for dr in (0, 1) for dc in (0, 1)]
+            xs = [c - r * FRONT_SHEAR for r, c in corners]
+            ys = [r * FRONT_DEPTH + dz for r, _ in corners
+                  for dz in (-2.2 * HEIGHT_SCALE, .45 * HEIGHT_SCALE)]  # standing block .. tile side
+            width = max(2, min(112, size[0] * .88 / (max(xs) - min(xs)),
+                                size[1] * .88 / (max(ys) - min(ys))))
+            origin = (size[0] / 2 - (min(xs) + max(xs)) * width / 2,
+                      size[1] / 2 - (min(ys) + max(ys)) * width / 2)
+            self.camera = Camera3D(origin, width, width * FRONT_DEPTH, width * .24, 'front')
+            return
         xs = [(c - r + delta) / 2 for r, c in cells for delta in (-1, 1)]
         ys = [(r + c) / 4 + delta for r, c in cells for delta in (-1.38, .68)]
         width = max(2, min(112, size[0] * .88 / (max(xs) - min(xs)),
                             size[1] * .88 / (max(ys) - min(ys))))
         origin = (size[0] / 2 - (min(xs) + max(xs)) * width / 2,
                   size[1] / 2 - (min(ys) + max(ys)) * width / 2)
-        self.camera = Camera3D(origin, width, width / 2, width * .24)
+        self.camera = Camera3D(origin, width, width / 2, width * .24, 'iso')
 
     def project(self, point: Point) -> tuple[float, float]:
         x, y = self.camera.project(point[0], point[1], point[2] * self.camera.tile_width * 0.6)
         return ((x - self.size[0] / 2) * self.zoom + self.size[0] / 2 + self.pan[0],
                 (y - self.size[1] / 2) * self.zoom + self.size[1] / 2 + self.pan[1])
 
-    def _faces(self, vertices, color, outline=None, faces=FACES, player=False):
+    def _faces(self, vertices, color, outline=None, faces=FACES, player=False, cut=False):
+        """cut=True: the faces were split at the board top by clip_below_floor().
+        The 4th item of each result is then a per-edge flag marking the cut
+        edges (z = 0), so _block_face() can leave them without a seam line."""
         result = []
         for face in faces:
             points = [vertices[i] for i in face]
@@ -200,7 +353,10 @@ class IsometricRenderer:
                        for p, q in zip(projected, projected[1:] + projected[:1]))
             if area <= 0.001:
                 continue
-            depth = sum(p[0] + p[1] + p[2] * (5 / 6) for p in points) / len(points)
+            if cut:
+                outline = tuple(abs(p[2]) < 1e-9 and abs(q[2]) < 1e-9
+                                for p, q in zip(points, points[1:] + points[:1]))
+            depth = sum(self.camera.depth(*p) for p in points) / len(points)
             a, b, c = points[:3]
             u, v = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
             normal = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
@@ -243,7 +399,7 @@ class IsometricRenderer:
                 if bridge is not None:
                     if bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
                         pts=[self.project(p) for p in cuboid(r,c,-.12,1,1,0)[:4]]
-                        commands.append((r+c+1,'outline',pts));continue
+                        commands.append((self.camera.depth(r+.5,c+.5,0),'outline',pts));continue
                 elif tile==TileType.VOID:continue
                 top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
                 tile_outlines.append(top)
@@ -257,7 +413,7 @@ class IsometricRenderer:
                 label='goal' if coord==self.stage.goal else '!' if tile==TileType.FRAGILE else ''
                 if coord in self.stage.switches:
                     label={'SOFT':'O','HEAVY':'X','SPLIT':'<>'}[self.stage.switches[coord].type.value]
-                if label:commands.append((r+c+1.001,'marker',((r+.5,c+.5,.01),label)))
+                if label:commands.append((self.camera.depth(r+.5,c+.5,0)+.001,'marker',((r+.5,c+.5,.01),label)))
                 if coord==self.stage.goal:
                     holes.append([self.project(p) for p in cuboid(r+.16,c+.16,0,.68,.68,0)[:4]])
         for hole in holes:pygame.draw.polygon(self._top_mask,(0,0,0,0),hole)
@@ -281,6 +437,49 @@ class IsometricRenderer:
         self._frame_key=None
         self.stats['cached_layer_bytes']=self.size[0]*self.size[1]*4*3
 
+    def _supported(self, cell, bridges_status) -> bool:
+        """A tile (not void / outside / closed bridge) is under this cell."""
+        r, c = cell
+        grid = self.stage.grid
+        if not (0 <= r < len(grid) and 0 <= c < len(grid[r])):
+            return False
+        bridge = self.bridge_cells.get(cell)
+        if bridge is not None:
+            return bridge < len(bridges_status) and bridges_status[bridge]
+        return grid[r][c] != TileType.VOID
+
+    def _tip(self, pose: GameState, action: Action) -> Tip | None:
+        """Which edge the falling block topples over (see tip_mesh).
+
+        - All cells supported (fragile tile broke) -> None: straight drop.
+        - Lying block, one half supported -> tip along the block toward the
+          empty half, around the edge between the two halves.
+        - Nothing supported -> nose-dive forward in the rolling direction,
+          around the block's trailing bottom edge.
+        """
+        if self.stage is None:
+            return None
+        if pose.orientation == Orientation.SPLIT:
+            cells = [pose.pos1 if pose.active_cube == 0 else pose.pos2]
+        elif pose.orientation == Orientation.STANDING:
+            cells = [pose.pos1]
+        else:
+            cells = [pose.pos1, pose.pos2]
+        supported = [cell for cell in cells if self._supported(cell, pose.bridges_status)]
+        if len(supported) == len(cells):
+            return None
+        if supported:
+            held, empty = supported[0], next(cell for cell in cells if cell not in supported)
+            axis = 0 if held[0] != empty[0] else 1
+            direction = 1 if empty[axis] > held[axis] else -1
+            pivot = held[axis] + (1 if direction > 0 else 0)
+            return axis, direction, pivot
+        axis = 0 if action in (Action.UP, Action.DOWN) else 1
+        direction = 1 if action in (Action.DOWN, Action.RIGHT) else -1
+        low = min(cell[axis] for cell in cells)
+        high = max(cell[axis] for cell in cells) + 1
+        return axis, direction, (low if direction > 0 else high)
+
     @staticmethod
     def _hull(points):
         points=sorted(set(points))
@@ -294,7 +493,7 @@ class IsometricRenderer:
             halves.extend(half[:-1])
         return halves
 
-    def _block_face(self,surface,points,color):
+    def _block_face(self,surface,points,color,cut=None):
         # Baked satin microtexture; all face tints reuse two signed detail maps.
         color=tuple(min(255,round(v/8)*8) for v in color)
         texture=self._block_textures.get(color)
@@ -306,8 +505,9 @@ class IsometricRenderer:
                 texture.fill((int(255*strength),)*3,special_flags=pygame.BLEND_RGB_MULT)
                 self._block_textures[color]=texture
                 pts=[(round(x),round(y)) for x,y in points]
-                pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
-                pygame.draw.aalines(surface,color,True,pts)
+                if self._can_texture(surface,pts):
+                    pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
+                self._outline(surface,color,pts,cut)
                 return
             if self._brushed_detail is None:
                 light=pygame.Surface((64,128),pygame.SRCALPHA);light.fill((0,0,0,255))
@@ -325,10 +525,25 @@ class IsometricRenderer:
             texture.blit(self._brushed_detail[1],(0,0),special_flags=pygame.BLEND_RGB_SUB)
             self._block_textures[color]=texture
         pts=[(round(x),round(y)) for x,y in points]
-        pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
+        if self._can_texture(surface,pts):
+            pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
         # User-selected charcoal contour for the two architectural themes.
         edge=(48,47,48) if self.style in ('dream','blueprint') else color
-        pygame.draw.aalines(surface,edge,True,pts)
+        self._outline(surface,edge,pts,cut)
+
+    @staticmethod
+    def _outline(surface,color,pts,cut=None):
+        if not cut or not any(cut):
+            pygame.draw.aalines(surface,color,True,pts);return
+        for (a,b),skip in zip(zip(pts,pts[1:]+pts[:1]),cut):
+            if not skip:pygame.draw.aaline(surface,color,a,b)
+
+    @staticmethod
+    def _can_texture(surface,pts):
+        # SDL_gfx raises on zero-height or fully clipped polygons, e.g. a block falling off-screen.
+        xs=[x for x,_ in pts];ys=[y for _,y in pts]
+        box=pygame.Rect(min(xs),min(ys),max(xs)-min(xs)+1,max(ys)-min(ys)+1)
+        return max(ys)>min(ys) and box.colliderect(surface.get_clip())
 
     def draw(self,surface,state,motion=None):
         if surface.get_size()!=self.size:self.resize(surface.get_size())
@@ -342,13 +557,47 @@ class IsometricRenderer:
         key=(state,motion,static_key)
         if key!=self._frame_key:
             self.stats['dynamic_frames']+=1
-            self._frame.fill((0,0,0,0));self._frame.blit(self._base,(0,0))
-            meshes=motion_meshes(motion) if motion else state_meshes(state)
+            self._frame.fill((0,0,0,0))
+            falling=bool(motion and motion.falling)
+            if falling:
+                tip=self._tip(motion.after,motion.action)
+                tagged=fall_meshes(motion,tip)
+                dropping=motion.progress>=FALL_ROLL_END
+                meshes=[(v,a) for v,a,_ in tagged]
+                # What is below the board top is drawn first and the board is
+                # blitted over it, so the board hides the block wherever it is in
+                # front of it (parallel projection makes this exact).
+                # Tipping away from the viewer (direction -1: back / left), each
+                # face is cut at the board top: drawing a face that straddles it
+                # on top would show the block through the board. Tipping toward
+                # the viewer, the board is behind the block, so only faces fully
+                # below the top go underneath (cutting there would let the
+                # board's thick front side cover the block).
+                away=tip is not None and tip[1]<0
+                under=[]
+                for vertices,active,moving in tagged:
+                    if not moving:continue
+                    vertices,indices=bevel_mesh(vertices,.04,uniform=True)
+                    color=tuple(min(255,c+18) for c in self.BLOCK) if active else self.BLOCK
+                    if away:
+                        vertices,indices=clip_below_floor(vertices,indices,above=False)
+                    else:
+                        indices=[f for f in indices if max(vertices[i][2] for i in f)<0]
+                    under.extend(self._faces(vertices,color,faces=indices,player=True,cut=away and dropping))
+                for _,pts,color,cut in sorted(under,key=lambda item:item[0]):self._block_face(self._frame,pts,color,cut)
+            else:
+                sinking=bool(motion and motion.sinking)
+                meshes=sink_meshes(motion) if sinking else motion_meshes(motion) if motion else state_meshes(state)
+            self._frame.blit(self._base,(0,0))
             # Work only on the small projected shadow footprint, not the full viewport.
-            hulls=[self._hull([self.project((r+z*.65,c-z*.16,.01)) for r,c,z in vertices]) for vertices,_ in meshes]
+            shadow_meshes=([(v,a) for v,a,moving in tagged if not moving] if falling and dropping
+                           else [] if motion and motion.sinking else meshes)
+            hulls=[self._hull([self.project((r+z*.65,c-z*.16,.01)) for r,c,z in vertices]) for vertices,_ in shadow_meshes]
             all_points=[p for hull in hulls for p in hull]
-            x,y=floor(min(p[0] for p in all_points))-4,floor(min(p[1] for p in all_points))-4
-            bounds=pygame.Rect(x,y,ceil(max(p[0] for p in all_points))-x+5,ceil(max(p[1] for p in all_points))-y+5).clip(self._frame.get_rect())
+            bounds=pygame.Rect(0,0,0,0)
+            if all_points:
+                x,y=floor(min(p[0] for p in all_points))-4,floor(min(p[1] for p in all_points))-4
+                bounds=pygame.Rect(x,y,ceil(max(p[0] for p in all_points))-x+5,ceil(max(p[1] for p in all_points))-y+5).clip(self._frame.get_rect())
             if bounds.width and bounds.height:
                 contact=pygame.Surface(bounds.size,pygame.SRCALPHA)
                 for hull in hulls:
@@ -358,11 +607,19 @@ class IsometricRenderer:
                 contact.blit(self._top_mask,(0,0),bounds,special_flags=pygame.BLEND_RGBA_MULT)
                 self._frame.blit(contact,bounds)
             faces=[]
-            for vertices,active in meshes:
+            moving=[m for _,_,m in tagged] if falling else [False]*len(meshes)
+            for (vertices,active),mesh_moving in zip(meshes,moving):
                 vertices,indices=bevel_mesh(vertices,.04,uniform=True)
                 color=tuple(min(255,c+18) for c in self.BLOCK) if active else self.BLOCK
-                faces.extend(self._faces(vertices,color,faces=indices,player=True))
-            for _,pts,color,_ in sorted(faces,key=lambda item:item[0]):self._block_face(self._frame,pts,color)
+                if falling and away:  # the part below the board was already drawn under it
+                    vertices,indices=clip_below_floor(vertices,indices)
+                elif falling:
+                    indices=[f for f in indices if max(vertices[i][2] for i in f)>=0]
+                elif motion and motion.sinking:  # the hole swallows what is below the floor
+                    vertices,indices=clip_below_floor(vertices,indices)
+                faces.extend(self._faces(vertices,color,faces=indices,player=True,
+                                         cut=falling and away and dropping and mesh_moving))
+            for _,pts,color,cut in sorted(faces,key=lambda item:item[0]):self._block_face(self._frame,pts,color,cut)
             self._frame_key=key
         else:self.stats['frame_cache_hits']+=1
         surface.fill((0,0,0,0) if surface.get_flags()&pygame.SRCALPHA else self.BACKGROUND)

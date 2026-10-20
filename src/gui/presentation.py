@@ -30,11 +30,11 @@ def draw(app):
             app.replay.status,app.replay.index,app.replay.length,app.speed,app.message,
             app.algorithm,app.solve_current,id(app.result),app.details_open,app.solver_status,
             app.stage_picker,app.picker_page,app.menu,app.dropdown_open,app.sound_enabled,app.animate,
-            bool(app.actions),hovered,pygame.mouse.get_pressed(),
+            bool(app.actions),app.win_phase,app.stage_cleared,hovered,pygame.mouse.get_pressed(),
             pygame.time.get_ticks()//100 if app.busy else 0)
     board_key=(app.session.current_state,app.animation.frame,app.zoom,tuple(app.pan))
     cached=getattr(app,'_presentation_cache',None)
-    if cached and cached[0]==ui_key and not (app.menu or app.stage_picker or app.dropdown_open):
+    if cached and cached[0]==ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase=='choice'):
         if cached[1]==board_key:return False
         app.screen.blit(cached[2],(0,0))
         rect=app.board_rect
@@ -104,7 +104,7 @@ def _draw(app):
     button('theme',{'dream':'04 / DREAM CITY','blueprint':'05 / PAPER BLUEPRINT','forest':'02 / FOREST RUINS','forest_gl':'FOREST / OPENGL'}.get(style,style),316,20,268,style!='forest_gl',kind='quiet')
     button('choose', f'Stage {app.stage_index + 1:02}', panel_x-32, 20, 128,
            bool(app.stage_paths), 'quiet')
-    label(f'{app.session.moves} moves', 32, h-64, T.TEXT)
+    label(f'{app.session.moves} moves', 32, h-64, (255, 255, 255))
     button('help', '?', w - 152, 20, 40, kind='quiet')
     button('settings', 'Settings', w - 108, 20, 88, kind='quiet')
 
@@ -159,12 +159,14 @@ def _draw(app):
     x, pw, y = panel_x, T.PANEL_WIDTH, 144
     pygame.draw.line(screen, T.LINE, (x+8, y+40), (x+pw-8, y+40))
     if replaying:
-        label('Watch solution', x, y, f=heading)
+        label('Your moves' if app.stage_cleared else 'Watch solution', x, y, f=heading)
         label('One move at a time.', x, y + 40, T.MUTED)
         label(f'{app.replay.index} / {app.replay.length}', x, y + 104, f=display)
         label('moves played', x, y + 152, T.MUTED)
         button('stop', 'Exit replay', x, y + 208, pw)
         button('rewind', 'Back to start', x, y + 256, pw, kind='quiet')
+        if app.stage_cleared and app.stage_index + 1 < len(app.stage_paths):
+            button('next_stage', 'Next stage   →', x, y + 304, pw, not app.busy, 'primary')
     elif app.busy:
         label('Finding a path', x, y, f=heading)
         label({'ASTAR': 'A*'}.get(app.algorithm, app.algorithm), x, y + 40, T.MUTED)
@@ -210,6 +212,27 @@ def _draw(app):
                 button('algorithm:' + key, title, x + 8, y + 144 + i * 48, pw - 16,
                        kind='quiet', selected=app.algorithm == key)
 
+    # Win choice: replay the winning moves or go on to the next stage.
+    if app.win_phase == 'choice' and not (app.stage_picker or app.menu):
+        shade = pygame.Surface((w, h), pygame.SRCALPHA)
+        shade.fill((5, 12, 17, 140))
+        screen.blit(shade, (0, 0))
+        app.buttons = []
+        app.seek_rect = pygame.Rect(0, 0, 0, 0)
+        app.modal_rect = pygame.Rect((w - 480) // 2, (h - 272) // 2, 480, 272)
+        r = app.modal_rect
+        last = app.stage_index + 1 >= len(app.stage_paths)
+        pygame.draw.rect(screen, T.PANEL, r, border_radius=16)
+        label('Stage complete!', r.x + 32, r.y + 24, f=heading)
+        label(f'Stage {app.stage_index + 1:02} cleared in {app.session.moves} moves.', r.x + 32, r.y + 72, T.MUTED)
+        button('win_replay', 'Replay my moves', r.x + 32, r.y + 136, 200)
+        if last:
+            button('restart', 'Play again', r.x + 248, r.y + 136, 200, kind='primary')
+        else:
+            button('next_stage', 'Next stage   →', r.x + 248, r.y + 136, 200, kind='primary')
+        keys = 'P: replay  ·  R: play again' if last else 'P: replay  ·  Enter: next stage  ·  R: restart'
+        label(keys, r.x + 32, r.bottom - 56, T.MUTED, max_width=416)
+
     # Transient menus replace underlying hit targets.
     if app.stage_picker or app.menu:
         shade = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -242,11 +265,14 @@ def _draw(app):
                     ('text', 'Large text', app.large_text))):
                 label(title, xx, yy + 72 + i * 48)
                 button(key, 'On' if enabled else 'Off', r.right - 120, yy + 64 + i * 48, 88, selected=enabled)
-            button('camera', 'Reset camera', xx, r.bottom - 120, 416, kind='quiet')
+            view_label = 'View: Front' if app.renderer.view == 'front' else 'View: Classic'
+            button('view', view_label + ' · V', xx, r.bottom - 120, 200, kind='quiet')
+            button('camera', 'Reset camera', xx + 216, r.bottom - 120, 200, kind='quiet')
             button('recording', 'Replay my moves', xx, r.bottom - 64, 416, idle and bool(app.actions), 'quiet')
         else:
             lines = ['Stand the block upright in the dark goal.', 'Arrows / WASD: roll · Space: switch cube',
                      'Z: undo · R: restart · Esc: close menu', 'Scroll: zoom · Right-drag: pan the camera',
+                     'V: front / classic view · Falling off restarts',
                      'Circle: soft switch · X: heavy switch', 'Brackets: split switch · Crack: fragile tile',
                      'Outlined bridge: off · Light cube: active']
             for i, line in enumerate(lines):

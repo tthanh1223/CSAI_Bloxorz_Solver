@@ -73,6 +73,11 @@ class MotionFrame:
     after: GameState
     action: Action
     progress: float  # Normalized animation progress in [0, 1].
+    # True: `after` is the illegal pose the block rolls into before dropping
+    # off the board (engine never accepted it). Defaults keep old callers valid.
+    falling: bool = False
+    # True: the block (standing on the goal, before == after) sinks into the hole.
+    sinking: bool = False
 
 
 class SolverGateway(Protocol):

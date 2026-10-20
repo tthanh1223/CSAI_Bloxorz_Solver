@@ -430,3 +430,108 @@ def test_redesign_modes_and_layout(size, large):
     app.command('stop')
     assert 'undo' in check()
     pygame.quit()
+
+
+def test_fall_animates_then_restarts_stage():
+    app = app_fixture()
+    start = app.session.current_state
+    assert app.apply_action(Action.UP) is False          # stage 01: rolls off the top edge
+    assert app.session.status == 'LOST'
+    assert app.animation.busy and app.animation.frame.falling
+    app.pending_action = Action.DOWN                    # key pressed while falling is dropped
+    app.update(app.FALL_SECONDS / 2)
+    assert app.session.status == 'LOST'
+    app.update(app.FALL_SECONDS)
+    assert app.session.status == 'PLAYING' and app.session.current_state == start
+    assert app.actions == [] and app.pending_action is None
+    app.animate = False
+    app.apply_action(Action.UP)
+    app.update(.01)
+    assert app.session.status == 'PLAYING'
+
+
+def test_fall_frames_render_and_view_toggle(tmp_path):
+    pygame.init()
+    app = app_fixture()
+    surface = pygame.Surface((760, 600))
+    for view in ('front', 'iso'):
+        app.renderer.set_view(view)
+        assert app.renderer.camera.view == view
+        before = app.session.current_state
+        fallen = app.session.problem.fall_result(before, Action.UP)
+        for progress in (0, .2, .3, .5, .8, .99):
+            app.renderer.draw(surface, before, MotionFrame(before, fallen, Action.UP, progress, True))
+        pygame.image.save(surface, str(tmp_path / f'fall_{view}.png'))
+    app.command('view')
+    assert app.renderer.view == 'front'
+    pygame.quit()
+
+
+def win_manually(app):
+    path = solution(app)
+    for action in path:
+        while app.animation.busy:
+            app.update(.02)
+        assert app.apply_action(action)
+    return path
+
+
+def test_manual_win_sinks_then_offers_next_stage():
+    app = app_fixture()
+    win_manually(app)
+    assert app.session.status == 'WON' and app.win_phase == 'roll'
+    for _ in range(15):
+        app.update(.02)
+    assert app.win_phase == 'sink' and app.animation.frame.sinking
+    for _ in range(60):
+        app.update(.02)
+    # Waits for the player instead of loading the next stage by itself.
+    assert app.win_phase == 'choice' and app.stage_index == 0 and app.session.status == 'WON'
+    app.undo()
+    assert app.session.status == 'WON'
+    app.command('next_stage')
+    assert app.stage_index == 1 and app.session.status == 'PLAYING'
+    assert app.session.moves == 0 and app.win_phase is None and not app.stage_cleared
+
+
+def test_manual_win_replay_returns_to_choice():
+    app = app_fixture()
+    path = win_manually(app)
+    for _ in range(80):
+        app.update(.02)
+    assert app.win_phase == 'choice'
+    app.command('win_replay')
+    assert app.replay.status == ReplayStatus.PLAYING and app.win_phase is None
+    assert app.replay.path == tuple(path) and app.session.moves == 0
+    for _ in range(600):
+        app.update(.05)
+    assert app.replay.status == ReplayStatus.FINISHED and app.stage_index == 0
+    app.seek(1)
+    app.command('stop')
+    assert app.replay.status == ReplayStatus.EMPTY and app.win_phase == 'choice'
+    assert app.session.status == 'WON' and app.actions == list(path)
+    app.handle_key(pygame.K_RETURN)
+    assert app.stage_index == 1
+
+
+def test_replay_win_does_not_change_stage():
+    app = app_fixture()
+    app.load_replay(app.session.current_state, solution(app))
+    app.replay.play()
+    for _ in range(600):
+        app.update(.05)
+    assert app.session.status == 'WON' and app.stage_index == 0
+
+
+def test_sound_events_follow_gameplay():
+    class Recorder:
+        def __init__(self): self.log = []
+        def play(self, name='roll'): self.log.append(name)
+    app = app_fixture()
+    app.sound, app.sound_enabled, app.animate = Recorder(), True, False
+    assert app.apply_action(Action.UP) is False          # stage 01: falls off the top edge
+    assert app.sound.log == ['fall']
+    app.update(.01)
+    for action in solution(app):
+        app.apply_action(action)
+    assert app.sound.log[-1] == 'win' and app.sound.log.count('roll') >= 1

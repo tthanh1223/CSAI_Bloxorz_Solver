@@ -7,3 +7,4 @@ data/gui_session.tmp
 .env.*
 !.env.example
 *.log
+.DS_Store

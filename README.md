@@ -47,9 +47,22 @@ from the engine and solver packages.
 - Help contains controls and tile symbols. Result details expands solver metrics.
 - Escape: close the current menu, or quit the application.
 
-The renderer uses Pygame polygons, not a free-rotation 3D engine. Invalid moves
-are blocked according to the existing engine; there is no separate falling/loss
-state. IDS is the existing implementation named `DFS` internally.
+- V (or Settings > View): switch between the **front view** (default: Up moves
+  away from you, Down toward you, Left/Right move left/right on screen) and the
+  classic isometric view.
+- Falling: rolling off the board, onto a closed bridge, or standing upright on a
+  fragile tile makes the block topple over the edge and drop (game over); the
+  stage then restarts automatically.
+- Winning (manual play): the block sinks into the goal hole and the next stage
+  loads automatically. Watching a solution replay stays on the current stage.
+- Sound effects: put `roll`, `switch`, `split`, `fall`, `win` (.wav/.ogg/.mp3)
+  in `assets/sfx/` (see `assets/sfx/README.md`). Missing files fall back to
+  tones generated in `src/gui/sfx.py`. Settings > Sound turns them on/off.
+
+The renderer uses Pygame polygons, not a free-rotation 3D engine. Falls are
+detected by `BloxorzProblem.fall_result()` / `GameSession.fall()`; solvers still
+only use `get_successors()`, so falling never appears in a solution. IDS is the
+existing implementation named `DFS` internally.
 
 ## Editing the GUI
 

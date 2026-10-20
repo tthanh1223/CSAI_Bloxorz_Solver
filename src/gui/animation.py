@@ -12,10 +12,13 @@ class RollAnimation:
         self.duration_sec = duration_sec
         self.reset()
 
-    def start(self, before: GameState, after: GameState, action: Action) -> None:
+    def start(self, before: GameState, after: GameState, action: Action,
+              falling: bool = False, sinking: bool = False) -> None:
+        """falling=True: `after` is the illegal pose; the renderer drops the block.
+        sinking=True: the block stands on the goal and sinks into the hole."""
         if self.busy:
             raise RuntimeError("An animation is already running.")
-        self.frame = MotionFrame(before, after, action, 0.0)
+        self.frame = MotionFrame(before, after, action, 0.0, falling, sinking)
         self.busy = True
 
     def update(self, dt: float) -> None:

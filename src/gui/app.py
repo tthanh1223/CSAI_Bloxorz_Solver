@@ -1,8 +1,6 @@
 """GUI orchestration: engine is the only source of game rules."""
 from __future__ import annotations
 import json
-import math
-from array import array
 from pathlib import Path
 import pygame
 from src.engine.loader import load_stage
@@ -49,6 +47,8 @@ def read_state(data):
 
 class BloxorzApp:
     WINDOW_SIZE = (1180, 800)
+    FALL_SECONDS = 0.9  # roll to the edge, tip over and drop, then restart
+    WIN_SECONDS = 0.8   # sink into the goal hole, then load the next stage
 
     def __init__(self, session, stage_paths=None, gateway=None):
         self.session = session
@@ -73,7 +73,7 @@ class BloxorzApp:
         self.speed = 1.0
         self.wait = 0.0
         self.animate = True
-        self.sound_enabled = False
+        self.sound_enabled = True  # on by default; Settings > Sound turns it off
         self.high_contrast = False
         self.large_text = False
         self.sound = None
@@ -94,6 +94,9 @@ class BloxorzApp:
         self.board_rect = pygame.Rect(0, 0, 1, 1)
         self.font = self.small_font = self.title_font = None
         self.pending_action = None
+        # Win sequence (manual play only): 'roll' -> 'sink' -> 'choice' (replay or next stage).
+        self.win_phase = None
+        self.stage_cleared = False  # survives replaying the winning moves
 
     @property
     def busy(self):
@@ -110,8 +113,10 @@ class BloxorzApp:
         self.result = None
         self.solver_status = SolverStatus.IDLE
         self.wait = 0
+        self.stage_cleared = False
 
     def new_session(self, state):
+        self.win_phase = None  # any reload/restart/replay cancels the win sequence
         self.session = GameSession(BloxorzProblem(self.stage, state))
         if self.session.problem.is_goal(state):
             self.session.status = 'WON'
@@ -145,9 +150,15 @@ class BloxorzApp:
         if not replay and self.replay.status != ReplayStatus.EMPTY:
             self.message = 'Exit replay to play manually.'
             return False
+        if self.session.status == 'WON':
+            return False  # stage already finished; the win sequence takes over
         before = self.session.current_state
         if not self.session.apply_action(action):
-            self.message = 'Blocked. Keep the whole block on solid ground.'
+            fallen = None if replay else self.session.fall(action)
+            if fallen is not None:
+                self.start_fall(before, fallen, action)
+            else:
+                self.message = 'Blocked. Keep the whole block on solid ground.'
             return False
         self.actions.append(action)
         self.session.moves = sum(a != Action.SPACE for a in self.actions)
@@ -157,13 +168,81 @@ class BloxorzApp:
         self.result = self.result if replay else None
         if not replay:
             self.solver_status = SolverStatus.IDLE
-        if self.sound_enabled and self.sound:
-            self.sound.play()
+            if self.session.status == 'WON':
+                self.win_phase = 'roll'  # update() starts the sink once the roll ends
+        after = self.session.current_state
+        if action != Action.SPACE:
+            self.play_sfx('roll')
+        if after.bridges_status != before.bridges_status:
+            self.play_sfx('switch')
+        if after.orientation == Orientation.SPLIT and before.orientation != Orientation.SPLIT:
+            self.play_sfx('split')
+        if self.session.status == 'WON':
+            self.play_sfx('win')
         self.message = 'Rolling...' if self.animation.busy else 'Move accepted.'
         return True
 
+    def start_fall(self, before, fallen, action):
+        """The block rolled off the board (session.status is now 'LOST').
+
+        Play the fall animation; update() restarts the stage once it ends.
+        Without animation the restart happens on the next update().
+        """
+        self.pending_action = None
+        self.result = None
+        self.solver_status = SolverStatus.IDLE
+        self.message = 'You fell off the board!'
+        self.play_sfx('fall')
+        if self.animate:
+            self.animation.duration_sec = self.FALL_SECONDS
+            self.animation.start(before, fallen, action, falling=True)
+
+    def play_sfx(self, name):
+        """Play one sound effect (see src/gui/sfx.py) if sound is on."""
+        if self.sound_enabled and self.sound:
+            self.sound.play(name)
+
+    def finish_fall(self):
+        self.restart()
+        self.message = 'You fell off. Stage restarted - try again!'
+
+    def advance_win(self):
+        """Called every update(): drive the win sequence one step forward."""
+        if self.win_phase in (None, 'choice') or self.animation.busy:
+            return
+        if self.session.status != 'WON':  # e.g. undone before the sink started
+            self.win_phase = None
+            return
+        if self.win_phase == 'roll' and self.animate:
+            goal = self.session.current_state
+            self.animation.duration_sec = self.WIN_SECONDS
+            self.animation.start(goal, goal, self.actions[-1], sinking=True)
+            self.win_phase = 'sink'
+            self.message = 'Stage complete!'
+            return
+        # Sink finished (or animation is off): let the player replay or move on.
+        self.win_phase = 'choice'
+        self.stage_cleared = True
+        self.message = 'Stage complete!'
+
+    def next_stage(self):
+        moves = self.session.moves
+        if self.stage_index + 1 < len(self.stage_paths):
+            self.select_stage(self.stage_index + 1)
+            self.message = (f'Stage {self.stage_index:02} done in {moves} moves. '
+                            f'Now playing stage {self.stage_index + 1:02}.')
+        else:
+            self.message = f'Last stage done in {moves} moves - you finished every stage!'
+
+    def replay_win(self):
+        """Watch the winning moves from the start; Exit replay returns to the choice."""
+        self.load_replay(self.record_start, tuple(self.actions))
+        self.replay.play()
+        self.message = 'Replaying your moves.'
+
     def undo(self):
-        if self.busy or self.animation.busy or self.replay.status != ReplayStatus.EMPTY:
+        if (self.busy or self.animation.busy or self.replay.status != ReplayStatus.EMPTY
+                or self.win_phase == 'choice'):
             return
         if not self.actions:
             self.message = 'No move to undo.'
@@ -237,6 +316,13 @@ class BloxorzApp:
     def stop_replay(self):
         if self.animation.busy:
             self.animation.reset()
+        if self.stage_cleared and self.replay.initial_state is not None:
+            # Watching a finished stage: jump back to the goal and offer the choice again.
+            self.seek(self.replay.length)
+            self.replay.reset()
+            self.win_phase = 'choice'
+            self.message = 'Stage complete!'
+            return
         self.replay.reset()
         self.message = 'Continue playing from here.'
 
@@ -250,7 +336,8 @@ class BloxorzApp:
         data = {'version': 1, 'stage': self.stage_paths[self.stage_index].name,
                 'initial_state': state_dict(self.record_start), 'actions': [a.value for a in self.actions],
                 'replay': None, 'settings': {'animate': self.animate, 'sound': self.sound_enabled,
-                'contrast': self.high_contrast, 'large_text': self.large_text, 'speed': self.speed}}
+                'contrast': self.high_contrast, 'large_text': self.large_text, 'speed': self.speed,
+                'view': self.renderer.view}}
         if self.replay.initial_state is not None:
             data['replay'] = {'initial_state': state_dict(self.replay.initial_state),
                 'path': [a.value for a in self.replay.path], 'index': self.replay.index}
@@ -301,6 +388,9 @@ class BloxorzApp:
             speed = float(settings.get('speed', 1))
             if speed not in (0.5, 1, 2, 4):
                 raise ValueError('Invalid playback speed.')
+            view = settings.get('view', self.renderer.view)
+            if view not in ('front', 'iso'):
+                raise ValueError('Invalid camera view.')
         except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
             self.message = f'Load failed: {error}'
             return
@@ -318,16 +408,20 @@ class BloxorzApp:
             self.replay.index = cursor
             self.replay.status = ReplayStatus.FINISHED if cursor == len(replay_path) else ReplayStatus.PAUSED
         self.animate = bool(settings.get('animate', True))
-        self.sound_enabled = bool(settings.get('sound', False)) and self.sound is not None
+        self.sound_enabled = bool(settings.get('sound', True)) and self.sound is not None
         self.high_contrast = bool(settings.get('contrast', False))
         self.large_text = bool(settings.get('large_text', False))
         self.speed = speed
+        self.renderer.set_view(view)
         self.zoom, self.pan = 1.0, [0, 0]
         self.stage_picker = False
         self.message = 'Session loaded.'
 
     def update(self, dt):
         self.animation.update(dt)
+        if self.session.status == 'LOST' and not self.animation.busy:
+            self.finish_fall()
+        self.advance_win()
         response = self.gateway.poll()
         if response is not None and response.request_id == self.active_request:
             self.active_request = None
@@ -348,8 +442,10 @@ class BloxorzApp:
             if self.wait <= 0:
                 self.replay_step()
                 self.wait = 0.12 / self.speed
-        if self.session.status == 'WON' and not self.animation.busy and not self.busy:
-            self.message = 'Stage complete. Choose another stage above.'
+        if (self.session.status == 'WON' and self.win_phase is None and not self.animation.busy
+                and not self.busy and self.replay.status != ReplayStatus.EMPTY):
+            self.message = ('Replay finished. Exit replay to continue.' if self.stage_cleared
+                            else 'Stage complete. Choose another stage above.')
 
     def handle_key(self, key):
         if self.stage_picker or self.menu or self.dropdown_open:
@@ -360,12 +456,15 @@ class BloxorzApp:
             return
         shortcuts = {pygame.K_r: 'restart', pygame.K_z: 'undo', pygame.K_p: 'play',
                      pygame.K_F5: 'save', pygame.K_F9: 'load', pygame.K_PERIOD: 'step',
-                     pygame.K_COMMA: 'back', pygame.K_HOME: 'camera'}
+                     pygame.K_COMMA: 'back', pygame.K_HOME: 'camera', pygame.K_v: 'view'}
+        if self.win_phase == 'choice' and key == pygame.K_p:
+            self.command('win_replay')
+            return
         if key in shortcuts:
             self.command(shortcuts[key])
             return
         if key == pygame.K_RETURN and self.session.status == 'WON':
-            self.select_stage(self.stage_index + 1)
+            self.next_stage()
             return
         mapping = {pygame.K_UP: Action.UP, pygame.K_w: Action.UP, pygame.K_DOWN: Action.DOWN,
                    pygame.K_s: Action.DOWN, pygame.K_LEFT: Action.LEFT, pygame.K_a: Action.LEFT,
@@ -420,6 +519,8 @@ class BloxorzApp:
             self.picker_page = max(0, self.picker_page - 1)
         elif key == 'page_next':
             self.picker_page = min((len(self.stage_paths) - 1) // 20, self.picker_page + 1)
+        elif key == 'next_stage': self.next_stage()
+        elif key == 'win_replay' and self.actions and not self.busy: self.replay_win()
         elif key == 'restart': self.restart()
         elif key == 'undo': self.undo()
         elif key == 'solve': self.solve()
@@ -452,6 +553,11 @@ class BloxorzApp:
         elif key == 'save': self.save()
         elif key == 'load': self.load()
         elif key == 'camera': self.zoom, self.pan = 1.0, [0, 0]
+        elif key == 'view':
+            view = 'iso' if self.renderer.view == 'front' else 'front'
+            self.renderer.set_view(view)
+            self.message = ('Front view: Up = away, Down = toward you.' if view == 'front'
+                            else 'Classic isometric view.')
         elif key == 'animate':
             self.animate = not self.animate
             if not self.animate: self.animation.reset()
@@ -503,12 +609,8 @@ class BloxorzApp:
         self.font = pygame.font.Font(None, 28)
         self.title_font = pygame.font.Font(None, 38)
         if pygame.mixer.get_init():
-            rate, _, channels = pygame.mixer.get_init()
-            samples = array('h')
-            for i in range(int(rate * 0.065)):
-                value = int(2200 * math.sin(2 * math.pi * 550 * i / rate) * (1 - i / (rate * 0.065)))
-                samples.extend([value] * channels)
-            self.sound = pygame.mixer.Sound(buffer=samples)
+            from src.gui.sfx import SoundBank
+            self.sound = SoundBank()
         clock = pygame.time.Clock()
         try:
             running = True
