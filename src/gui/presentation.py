@@ -96,12 +96,12 @@ def _draw(app):
     # Right panel background container
     panel = pygame.Surface((T.PANEL_WIDTH + 32, h - 100), pygame.SRCALPHA)
     if style == 'blueprint':
-        panel.fill((*T.PANEL, 90))
-        pygame.draw.line(panel, T.LINE, (0, 0), (0, panel.get_height()))
+        pygame.draw.rect(panel, (*T.PANEL, 238), panel.get_rect(), border_radius=20)
+        pygame.draw.rect(panel, (*T.LINE, 180), panel.get_rect(), 1, border_radius=20)
     else:
-        pygame.draw.rect(panel, (*T.PANEL, 218 if forest else 240), panel.get_rect(), border_radius=22)
-        if forest:
-            pygame.draw.rect(panel, (*T.LINE, 130), panel.get_rect(), 1, border_radius=22)
+        pygame.draw.rect(panel, (*T.PANEL, 228 if forest else 244), panel.get_rect(), border_radius=22)
+        border_col = (*T.LINE, 160) if forest else (255, 255, 255, 140)
+        pygame.draw.rect(panel, border_col, panel.get_rect(), 1, border_radius=22)
     screen.blit(panel, (panel_x - 16, 76))
 
     def label(value, x, y, color=T.TEXT, f=body, max_width=None):
@@ -142,7 +142,7 @@ def _draw(app):
         button('restart', 'Restart', dock_x + 118, dock_y + 6, 104, True, kind='dock_item')
         button('hint', 'Hint', dock_x + 230, dock_y + 6, 102, manual, kind='dock_item')
     else:
-        dock_w = min(470, max(360, panel_x - 32))
+        dock_w = min(530, max(390, panel_x - 32))
         dock_x = app.board_rect.centerx - dock_w // 2
         dock_surf = pygame.Surface((dock_w, 52), pygame.SRCALPHA)
         dock_surf.fill((*T.PANEL, 218 if forest else 236))
@@ -156,14 +156,15 @@ def _draw(app):
         button('speed', f'{app.speed:g}×', dock_x + 250, dock_y + 6, 54, kind='dock_item')
 
         timeline_x = dock_x + 312
-        app.seek_rect = pygame.Rect(timeline_x, dock_y + 24, max(48, dock_w - 324), 6)
+        seek_w = max(44, dock_w - 386)
+        app.seek_rect = pygame.Rect(timeline_x, dock_y + 23, seek_w, 6)
         pygame.draw.rect(screen, T.LINE, app.seek_rect, border_radius=3)
         ratio = app.replay.index / max(1, app.replay.length)
         fill = app.seek_rect.copy()
         fill.width = int(fill.width * ratio)
         pygame.draw.rect(screen, T.ACCENT, fill, border_radius=3)
         pygame.draw.circle(screen, T.ACCENT, (app.seek_rect.x + fill.width, app.seek_rect.centery), 5)
-        label(f'{app.replay.index} / {app.replay.length}', timeline_x, dock_y - 20, T.MUTED, f=mono)
+        label(f'{app.replay.index}/{app.replay.length}', timeline_x + seek_w + 10, dock_y + 16, T.MUTED, f=caption)
 
     # Toast line
     message = app.message

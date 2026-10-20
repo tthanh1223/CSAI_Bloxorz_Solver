@@ -56,9 +56,11 @@ def _font(level='body', large=False):
         if cand.exists():
             font_file = cand
     else:  # 'body', 'caption'
-        cand = FONTS_DIR / 'SpaceGrotesk-Medium.ttf'
+        cand = FONTS_DIR / 'Outfit-Medium.ttf'
         if not cand.exists():
             cand = FONTS_DIR / 'Outfit-Regular.ttf'
+        if not cand.exists():
+            cand = FONTS_DIR / 'SpaceGrotesk-Medium.ttf'
         if cand.exists():
             font_file = cand
 

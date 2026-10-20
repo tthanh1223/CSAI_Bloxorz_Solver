@@ -155,7 +155,7 @@ class Button:
 
         # Draw icon and label
         has_vector_icon = self.icon or self.key in ('undo', 'restart', 'hint', 'play', 'step', 'back', 'stop')
-        icon_name = self.icon or self.key
+        icon_name = self.icon or ('pause' if self.label == 'Pause' else self.key)
 
         if has_vector_icon and self.kind in ('dock_item', 'icon'):
             # Draw icon on the left, label on the right

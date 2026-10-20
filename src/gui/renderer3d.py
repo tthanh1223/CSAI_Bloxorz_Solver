@@ -27,8 +27,8 @@ FACES = ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4),
 #            almost level and the board's left and front sides show.
 #            UP = away from you, LEFT/RIGHT = left/right on screen.
 # ---------------------------------------------------------------------------
-VIEWS = ('original', 'iso')
-DEFAULT_VIEW = 'original'
+VIEWS = ('iso', 'original')
+DEFAULT_VIEW = 'iso'
 HEIGHT_SCALE = 0.6  # 'iso': one unit of block height = 0.6 * tile width (see project())
 
 # 'original' perspective camera, aimed at the board centre.
@@ -447,6 +447,47 @@ class IsometricRenderer:
         self.stats['static_builds']+=1
         self._base=pygame.Surface(self.size,pygame.SRCALPHA)
         self._top_mask=pygame.Surface(self.size,pygame.SRCALPHA)
+        # Collect active cells to ground the 3D board to the background environment
+        active_cells = []
+        for r, row in enumerate(self.stage.grid):
+            for c, tile in enumerate(row):
+                coord = (r, c)
+                bridge = self.bridge_cells.get(coord)
+                if bridge is not None:
+                    if bridge < len(shown.bridges_status) and shown.bridges_status[bridge]:
+                        active_cells.append(coord)
+                elif tile != TileType.VOID and coord != broken:
+                    active_cells.append(coord)
+
+        if self.style == 'blueprint':
+            # Blueprint datum floor footprint & architectural projection lines
+            for r, c in active_cells:
+                fp = [self.project((r + dr, c + dc, -0.62)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
+                pygame.draw.polygon(self._base, (20, 52, 78, 55), fp)
+                pygame.draw.aalines(self._base, (48, 130, 160, 60), True, fp)
+            corners = set()
+            for r, c in active_cells:
+                for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0)):
+                    corners.add((r + dr, c + dc))
+            for cr, cc in corners:
+                adjacent = sum((cr - dr, cc - dc) in active_cells for dr in (0, 1) for dc in (0, 1))
+                if adjacent < 4:
+                    top_p = self.project((cr, cc, -0.32))
+                    bot_p = self.project((cr, cc, -0.62))
+                    for st in range(0, 8, 2):
+                        t1, t2 = st / 8, (st + 1) / 8
+                        pa = (top_p[0] + (bot_p[0] - top_p[0]) * t1, top_p[1] + (bot_p[1] - top_p[1]) * t1)
+                        pb = (top_p[0] + (bot_p[0] - top_p[0]) * t2, top_p[1] + (bot_p[1] - top_p[1]) * t2)
+                        pygame.draw.line(self._base, (64, 168, 196, 75), pa, pb, 1)
+        elif self.style == 'dream':
+            for r, c in active_cells:
+                fp = [self.project((r + dr + 0.12, c + dc + 0.12, -0.55)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
+                pygame.draw.polygon(self._base, (108, 76, 96, 38), fp)
+        elif self.style == 'forest':
+            for r, c in active_cells:
+                fp = [self.project((r + dr, c + dc, -0.75)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
+                pygame.draw.polygon(self._base, (16, 26, 20, 110), fp)
+
         commands=[]
         holes=[]
         tile_outlines=[]
@@ -463,7 +504,7 @@ class IsometricRenderer:
                 pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
                 color=(112,145,151) if bridge is not None else ((178,200,193) if self.high_contrast else self.FLOOR)
                 if tile==TileType.FRAGILE:color=self.FRAGILE
-                vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.24,.976,.976,.24),.018)
+                vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.32,.976,.976,.32),.02)
                 for depth,pts,ink,edge in self._faces(vertices,color,faces=indices):
                     commands.append((depth,'face',(pts,ink)))
                 label='goal' if coord==self.stage.goal else '!' if tile==TileType.FRAGILE else ''
@@ -478,12 +519,11 @@ class IsometricRenderer:
                 pts,ink=payload
                 if len(pts)==4:self._material(self._base,pts,ink)
                 else:pygame.draw.polygon(self._base,ink,pts)
-                # Bevel polygons provide edge shading; avoid stacking outlines.
             elif kind=='marker':self._marker(self._base,*payload)
             else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
         seam={'dream':(48,47,48),'blueprint':(48,47,48),'forest':(102,112,80)}.get(self.style,(168,174,163))
         seams=pygame.Surface(self.size,pygame.SRCALPHA)
-        for outline in tile_outlines:pygame.draw.aalines(seams,(*seam,145),True,outline)
+        for outline in tile_outlines:pygame.draw.aalines(seams,(*seam,165),True,outline)
         self._base.blit(seams,(0,0))
         if self.style=='forest':self._moss_edges(shown)
         # Retain a bounded number of full-size buffers, never one per state.
@@ -557,43 +597,16 @@ class IsometricRenderer:
             halves.extend(half[:-1])
         return halves
 
-    def _block_face(self,surface,points,color,cut=None):
-        # Baked satin microtexture; all face tints reuse two signed detail maps.
-        color=tuple(min(255,round(v/8)*8) for v in color)
-        texture=self._block_textures.get(color)
-        if texture is None:
-            if self.style=='forest' and self.gold_texture is not None:
-                texture=pygame.Surface((64,128),pygame.SRCALPHA)
-                texture.blit(pygame.transform.smoothscale(self.gold_texture,(64,128)),(0,0))
-                strength=min(1.,sum(color)/max(1,sum(self.BLOCK)))
-                texture.fill((int(255*strength),)*3,special_flags=pygame.BLEND_RGB_MULT)
-                self._block_textures[color]=texture
-                pts=[(round(x),round(y)) for x,y in points]
-                if self._can_texture(surface,pts):
-                    pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
-                self._outline(surface,color,pts,cut)
-                return
-            if self._brushed_detail is None:
-                light=pygame.Surface((64,128),pygame.SRCALPHA);light.fill((0,0,0,255))
-                dark=light.copy()
-                rng=random.Random(71)
-                for y in range(128):
-                    fiber=rng.choice((-3,-2,-1,0,0,1,2,3))
-                    for x in range(64):
-                        delta=round(fiber+2*sin(x*pi/32)+rng.choice((-1,0,0,1)))
-                        target=light if delta>=0 else dark
-                        target.set_at((x,y),(abs(delta),)*3+(255,))
-                self._brushed_detail=(light,dark)
-            texture=pygame.Surface((64,128),pygame.SRCALPHA);texture.fill(color)
-            texture.blit(self._brushed_detail[0],(0,0),special_flags=pygame.BLEND_RGB_ADD)
-            texture.blit(self._brushed_detail[1],(0,0),special_flags=pygame.BLEND_RGB_SUB)
-            self._block_textures[color]=texture
-        pts=[(round(x),round(y)) for x,y in points]
-        if self._can_texture(surface,pts):
-            pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
-        # User-selected charcoal contour for the two architectural themes.
-        edge=(48,47,48) if self.style in ('dream','blueprint') else color
-        self._outline(surface,edge,pts,cut)
+    def _block_face(self, surface, points, color, cut=None):
+        pts = [(round(x), round(y)) for x, y in points]
+        if not self._can_texture(surface, pts):
+            return
+        pygame.draw.polygon(surface, color, pts)
+        if len(pts) >= 4 and pts[1][1] <= pts[2][1]:
+            sheen = tuple(min(255, c + 36) for c in color)
+            pygame.draw.aaline(surface, sheen, pts[0], pts[1])
+        edge = (48, 47, 48) if self.style in ('dream', 'blueprint') else color
+        self._outline(surface, edge, pts, cut)
 
     @staticmethod
     def _outline(surface,color,pts,cut=None):
@@ -678,9 +691,8 @@ class IsometricRenderer:
             if bounds.width and bounds.height:
                 contact=pygame.Surface(bounds.size,pygame.SRCALPHA)
                 for hull in hulls:
-                    if len(hull)>=3:pygame.draw.polygon(contact,(98,72,107,85),[(a-bounds.x,b-bounds.y) for a,b in hull])
-                tiny=pygame.transform.smoothscale(contact,(max(1,bounds.w//4),max(1,bounds.h//4)))
-                pygame.transform.smoothscale(tiny,bounds.size,contact)
+                    if len(hull)>=3:
+                        pygame.draw.polygon(contact,(72,52,78,75),[(a-bounds.x,b-bounds.y) for a,b in hull])
                 contact.blit(self._top_mask,(0,0),bounds,special_flags=pygame.BLEND_RGBA_MULT)
                 self._frame.blit(contact,bounds)
             faces=[]
@@ -716,100 +728,121 @@ class IsometricRenderer:
             self.material_cache[key]=stamp
         surface.blit(stamp,(x,y))
 
-    def _paint_material(self,surface,points,color):
-        pygame.draw.polygon(surface,color,points)
-        if self.style=='forest' and self.stone_texture is not None:
-            self._stone_material(surface,points,color)
-            return
-        a,b,_,d=points
-        warm = color[0] > color[1] * 1.12
-        # Rich Monument Valley terrazzo palette: quartz, amethyst purple, coral pink, terracotta, deep plum
-        palette = ((253, 251, 247), (107, 91, 130), (226, 141, 122), (232, 162, 120), (74, 59, 88))
-        if self.style == 'blueprint':
-            rng = random.Random(92)
-            # Fine fibers and paper grain, without terrazzo inclusions.
-            for _ in range(140):
-                u, v = rng.uniform(.02, .98), rng.uniform(.02, .98)
-                p = (a[0] + (b[0] - a[0]) * u + (d[0] - a[0]) * v, a[1] + (b[1] - a[1]) * u + (d[1] - a[1]) * v)
-                delta = rng.choice((-9, -5, 4, 8))
-                pygame.draw.line(surface, tuple(max(0, min(255, c + delta)) for c in color), p, (p[0] + rng.uniform(.5, 1.5), p[1]))
-            return
-        for u, v, s, index in self.flecks:
-            def at(x, y):
-                return (a[0] + (b[0] - a[0]) * x + (d[0] - a[0]) * y, a[1] + (b[1] - a[1]) * x + (d[1] - a[1]) * y)
-            ink = tuple(min(255, max(0, c + (7 if index % 2 else -8))) for c in color) if warm else palette[index % len(palette)]
-            pygame.draw.polygon(surface, ink, [at(u, v), at(u + s, v + s * .2), at(u + s * .4, v + s), at(u - s * .3, v + s * .5)])
+    def _paint_material(self, surface, points, color):
+        pygame.draw.polygon(surface, color, points)
+        if len(points) >= 4:
+            highlight = tuple(min(255, c + 30) for c in color)
+            pygame.draw.aaline(surface, highlight, points[0], points[1])
 
-
-    def _stone_material(self,surface,points,color):
-        width,height=surface.get_size()
-        a,b,_,d=points
-        top=abs((b[1]-a[1])+(d[1]-a[1]))>1 and abs(b[1]-d[1])<2
-        source=pygame.transform.rotate(self.stone_texture,45) if top else self.stone_texture
-        texture=pygame.transform.smoothscale(source,(width,height))
-        brightness=min(1.,sum(color)/max(1,sum(self.FLOOR)))
-        texture.fill((int(brightness*255),)*3,special_flags=pygame.BLEND_RGB_MULT)
-        mask=pygame.Surface(surface.get_size(),pygame.SRCALPHA)
-        pygame.draw.polygon(mask,(255,255,255,255),points)
-        rgba=pygame.Surface(surface.get_size(),pygame.SRCALPHA)
-        rgba.blit(texture,(0,0))
-        rgba.blit(mask,(0,0),special_flags=pygame.BLEND_RGBA_MULT)
-        surface.blit(rgba,(0,0))
-
-    def _moss_edges(self,shown):
-        """Baked hanging moss only along exposed front-facing edges."""
-        rng=random.Random(842)
-        cells=set()
-        for r,row in enumerate(self.stage.grid):
-            for c,tile in enumerate(row):
-                bridge=self.bridge_cells.get((r,c))
+    def _moss_edges(self, shown):
+        """Crisp architectural moss line along exposed front-facing edges."""
+        cells = set()
+        for r, row in enumerate(self.stage.grid):
+            for c, tile in enumerate(row):
+                bridge = self.bridge_cells.get((r, c))
                 if bridge is not None:
-                    if bridge<len(shown.bridges_status) and shown.bridges_status[bridge]:cells.add((r,c))
-                elif tile!=TileType.VOID:cells.add((r,c))
-        for r,c in cells:
-            for neighbor,start,end in (((r+1,c),(r+1,c),(r+1,c+1)),((r,c+1),(r,c+1),(r+1,c+1))):
-                if neighbor in cells:continue
-                for _ in range(7):
-                    t=rng.random()
-                    rr=start[0]+(end[0]-start[0])*t
-                    cc=start[1]+(end[1]-start[1])*t
-                    x,y=self.project((rr,cc,-.05))
-                    length=rng.uniform(.05,.28)*self.camera.tile_width*self.zoom
-                    for i in range(max(2,int(length/3))):
-                        pygame.draw.circle(self._base,rng.choice(((64,80,30),(90,109,39),(120,131,54))),
-                                           (round(x+rng.uniform(-2,2)),round(y+i*3)),max(1,round(self.zoom*1.4)))
+                    if bridge < len(shown.bridges_status) and shown.bridges_status[bridge]:
+                        cells.add((r, c))
+                elif tile != TileType.VOID:
+                    cells.add((r, c))
+        for r, c in cells:
+            for neighbor, start, end in (((r + 1, c), (r + 1, c), (r + 1, c + 1)), ((r, c + 1), (r, c + 1), (r + 1, c + 1))):
+                if neighbor in cells:
+                    continue
+                pa = self.project((start[0], start[1], -0.04))
+                pb = self.project((end[0], end[1], -0.04))
+                pygame.draw.aaline(self._base, (92, 118, 54), pa, pb)
 
     def _marker(self, surface, point, kind):
         r, c, z = point
-        ink = (121, 104, 137)
-        def project(dr, dc):
-            return self.project((r + dr, c + dc, z))
-        def line(points, color=ink):
-            pygame.draw.aalines(surface, color, False, [project(*p) for p in points])
+        def project(dr, dc, dz=0):
+            return self.project((r + dr, c + dc, z + dz))
+
         if kind == 'goal':
-            # Recessed opening with a light far rim, no text label.
-            hole = [project(-.34,-.34), project(-.34,.34), project(.34,.34), project(.34,-.34)]
-            pygame.draw.polygon(surface, (13, 24, 32), hole)
-            inner=[(x,y+self.camera.tile_width*.12*self.zoom) for x,y in hole]
-            pygame.draw.polygon(surface,(89,83,111),[hole[0],hole[1],inner[1],inner[0]])
-            pygame.draw.polygon(surface,(63,64,87),[hole[0],inner[0],inner[3],hole[3]])
-            pygame.draw.aalines(surface, (250,231,212), True, hole)
-            if self.style=='forest':
-                rim=[project(-.4,-.4),project(-.4,.4),project(.4,.4),project(.4,-.4)]
-                pygame.draw.aalines(surface,(180,156,91),True,rim)
-                for i in range(4):
-                    a,b=rim[i],rim[(i+1)%4]
-                    for t in (.16,.34,.52,.7,.88):
-                        x,y=a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t
-                        pygame.draw.circle(surface,(94,103,76),(round(x),round(y)),1)
+            # Recessed void portal with glowing neon rim and inner depth
+            hole = [project(-.36, -.36), project(-.36, .36), project(.36, .36), project(.36, -.36)]
+            pygame.draw.polygon(surface, (10, 14, 20), hole)
+            # Inner wall depth
+            inner = [(x, y + self.camera.tile_width * 0.16 * self.zoom) for x, y in hole]
+            pygame.draw.polygon(surface, (28, 36, 48), [hole[0], hole[1], inner[1], inner[0]])
+            pygame.draw.polygon(surface, (18, 24, 34), [hole[0], inner[0], inner[3], hole[3]])
+            # Glowing neon gold/amber outer rim
+            accent = (248, 172, 72) if self.style != 'forest' else (210, 182, 85)
+            pygame.draw.aalines(surface, accent, True, hole)
+            outer = [project(-.40, -.40), project(-.40, .40), project(.40, .40), project(.40, -.40)]
+            pygame.draw.aalines(surface, (accent[0], accent[1], accent[2]), True, outer)
+
         elif kind == 'O':
-            points = [project(.23*cos(i*pi/16), .23*sin(i*pi/16)) for i in range(33)]
-            pygame.draw.aalines(surface, ink, False, points)
+            # SOFT SWITCH: Raised circular tactile button with illuminated amber core
+            ring_pts = [project(0.28 * cos(i * pi / 16), 0.28 * sin(i * pi / 16)) for i in range(32)]
+            core_pts = [project(0.20 * cos(i * pi / 16), 0.20 * sin(i * pi / 16)) for i in range(32)]
+            inner_dot = [project(0.09 * cos(i * pi / 16), 0.09 * sin(i * pi / 16)) for i in range(32)]
+
+            # High-contrast dark base ring so it always pops regardless of tile texture
+            pygame.draw.polygon(surface, (24, 28, 34), ring_pts)
+            # Illuminated bright gold/amber button
+            btn_color = (250, 182, 58) if not self.high_contrast else (255, 225, 70)
+            pygame.draw.polygon(surface, btn_color, core_pts)
+            # Core inner highlight
+            pygame.draw.polygon(surface, (255, 248, 224), inner_dot)
+            # Anti-aliased outer rim
+            pygame.draw.aalines(surface, (255, 235, 150), True, core_pts)
+            pygame.draw.aalines(surface, (16, 20, 26), True, ring_pts)
+
         elif kind == 'X':
-            line([(-.24,-.24),(.24,.24)])
-            line([(-.24,.24),(.24,-.24)])
+            # HEAVY SWITCH: Chunky, bold, high-contrast metallic X plate
+            pad = [project(-.35, -.35), project(-.35, .35), project(.35, .35), project(.35, -.35)]
+            pygame.draw.polygon(surface, (22, 26, 34), pad)
+            pygame.draw.aalines(surface, (58, 66, 82), True, pad)
+
+            # Thick bold X cross (drawn as polygon bands)
+            arm_w = 0.08
+            arm_len = 0.25
+            p1 = [
+                project(-arm_len, -arm_len + arm_w),
+                project(-arm_len + arm_w, -arm_len),
+                project(arm_len, arm_len - arm_w),
+                project(arm_len - arm_w, arm_len)
+            ]
+            p2 = [
+                project(-arm_len, arm_len - arm_w),
+                project(-arm_len + arm_w, arm_len),
+                project(arm_len, -arm_len + arm_w),
+                project(arm_len - arm_w, -arm_len)
+            ]
+            x_color = (235, 56, 44) if not self.high_contrast else (255, 40, 40)
+            pygame.draw.polygon(surface, x_color, p1)
+            pygame.draw.polygon(surface, x_color, p2)
+            pygame.draw.aalines(surface, (255, 185, 175), True, p1)
+            pygame.draw.aalines(surface, (255, 185, 175), True, p2)
+            # Center bright rivet
+            center_dot = [project(0.06 * cos(i * pi / 8), 0.06 * sin(i * pi / 8)) for i in range(16)]
+            pygame.draw.polygon(surface, (255, 255, 255), center_dot)
+
         elif kind == '<>':
-            line([(-.24,-.12),(-.24,-.27),(.24,-.27),(.24,-.12)])
-            line([(-.24,.12),(-.24,.27),(.24,.27),(.24,.12)])
+            # SPLIT SWITCH: Glowing cyan chevron brackets
+            pad = [project(-.34, -.34), project(-.34, .34), project(.34, .34), project(.34, -.34)]
+            pygame.draw.polygon(surface, (16, 30, 40), pad)
+            pygame.draw.aalines(surface, (38, 88, 110), True, pad)
+
+            cyan = (44, 220, 238)
+            c_left = [project(-.22, -.06), project(0, -.26), project(.22, -.06)]
+            c_right = [project(-.22, .06), project(0, .26), project(.22, .06)]
+            pygame.draw.aalines(surface, cyan, False, c_left)
+            pygame.draw.aalines(surface, cyan, False, c_right)
+            l1 = [project(-.18, -.06), project(0, -.22), project(.18, -.06)]
+            l2 = [project(-.18, .06), project(0, .22), project(.18, .06)]
+            pygame.draw.aalines(surface, (255, 255, 255), False, l1)
+            pygame.draw.aalines(surface, (255, 255, 255), False, l2)
+
         elif kind == '!':
-            line([(-.4,-.12),(-.1,.06),(.02,-.14),(.22,.12),(.4,.02)], (87, 78, 71))
+            # FRAGILE TILE: High-contrast fracture cracks and warning accent
+            dark_crack = (42, 28, 22)
+            orange_glow = (248, 140, 48)
+            crack1 = [project(-.42, -.24), project(-.22, -.04), project(0, -.18), project(.26, .08), project(.44, -.04)]
+            crack2 = [project(-.18, .36), project(-.04, .12), project(0, -.18), project(.08, -.34)]
+            for crack in (crack1, crack2):
+                pygame.draw.aalines(surface, dark_crack, False, crack)
+            h_pad = [project(0, -.14), project(-.14, 0), project(0, .14), project(.14, 0)]
+            pygame.draw.polygon(surface, (54, 34, 24), h_pad)
+            pygame.draw.aalines(surface, orange_glow, True, h_pad)

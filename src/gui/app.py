@@ -632,7 +632,7 @@ class BloxorzApp:
         if pygame.mixer.get_init():
             from src.gui.sfx import SoundBank
             self.sound = SoundBank()
-            bgm_path = ROOT / 'assets' / 'bgm' / 'ambient_zen.wav'
+            bgm_path = ROOT / 'assets' / 'bgm' / 'cheerful_puzzle.wav'
             if bgm_path.exists():
                 try:
                     pygame.mixer.music.load(str(bgm_path))
