@@ -30,11 +30,13 @@ def draw(app):
     mouse = pygame.mouse.get_pos()
     hovered = tuple(b.key for b in app.buttons if b.enabled and b.rect.collidepoint(mouse))
     hovered_metrics = tuple(i for i, r in enumerate(getattr(app, 'metric_rects', [])) if r.collidepoint(mouse))
+    is_split = getattr(getattr(app.session, 'current_state', None), 'orientation', None) == Orientation.SPLIT
     animating_ui = (bool(hovered) or bool(hovered_metrics) or app.busy
                     or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None
-                    or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None)
+                    or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
+                    or is_split)
     time_tick = (pygame.time.get_ticks() // 16) if animating_ui else 0
-    slider_state = (getattr(app, 'bgm_volume', 0.35), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
+    slider_state = (getattr(app, 'bgm_volume', 0.10), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
     ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), app.large_text, app.high_contrast,
               app.stage_index, app.session.moves, app.session.status, app.busy, app.animation.busy,
               app.replay.status, app.replay.index, app.replay.length, app.speed, app.message,
@@ -44,7 +46,7 @@ def draw(app):
               time_tick)
     animating_board = (getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
                        or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
-                       or app.session.current_state.orientation == Orientation.SPLIT)
+                       or is_split)
     board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan), animating_board)
     cached = getattr(app, '_presentation_cache', None)
     if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
@@ -53,10 +55,10 @@ def draw(app):
         app.screen.blit(cached[2], (0, 0))
         rect = app.board_rect
         if getattr(app, 'trauma', 0.0) > 0.01:
-            intensity = app.trauma ** 1.3
+            intensity = app.trauma ** 1.5
             ticks = pygame.time.get_ticks()
-            shake_x = round(math.sin(ticks * 0.048) * 12.0 * intensity + math.sin(ticks * 0.12) * 4.0 * intensity)
-            shake_y = round(math.cos(ticks * 0.062) * 9.0 * intensity + math.cos(ticks * 0.14) * 3.0 * intensity)
+            shake_x = round(math.sin(ticks * 0.048) * 2.5 * intensity)
+            shake_y = round(math.cos(ticks * 0.062) * 1.8 * intensity)
             rect = app.board_rect.move(shake_x, shake_y)
         app.screen.blit(scene(app), rect, rect)
         board = app._board_surface
@@ -160,10 +162,10 @@ def _draw(app):
                       shockwave=getattr(app, 'shockwave', None))
     draw_rect = app.board_rect
     if getattr(app, 'trauma', 0.0) > 0.01:
-        intensity = app.trauma ** 1.3
+        intensity = app.trauma ** 1.5
         ticks = pygame.time.get_ticks()
-        shake_x = round(math.sin(ticks * 0.048) * 12.0 * intensity + math.sin(ticks * 0.12) * 4.0 * intensity)
-        shake_y = round(math.cos(ticks * 0.062) * 9.0 * intensity + math.cos(ticks * 0.14) * 3.0 * intensity)
+        shake_x = round(math.sin(ticks * 0.048) * 2.5 * intensity)
+        shake_y = round(math.cos(ticks * 0.062) * 1.8 * intensity)
         draw_rect = app.board_rect.move(shake_x, shake_y)
     screen.blit(board, draw_rect)
 

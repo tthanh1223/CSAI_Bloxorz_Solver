@@ -74,7 +74,7 @@ class BloxorzApp:
         self.wait = 0.0
         self.animate = True
         self.sound_enabled = True  # on by default; Settings > Sound turns it off
-        self.bgm_volume: float = 0.35
+        self.bgm_volume: float = 0.10
         self.sfx_volume: float = 0.85
         self.active_slider: str | None = None
         self.bgm_slider_rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
@@ -209,22 +209,14 @@ class BloxorzApp:
         after = self.session.current_state
         if action != Action.SPACE:
             self.play_sfx('roll')
-            if after.orientation != Orientation.STANDING and after.orientation != Orientation.SPLIT:
-                self.add_trauma(0.42)
-            else:
-                self.add_trauma(0.22)
         else:
             self.play_sfx('switch')
-            self.add_trauma(0.20)
         if after.bridges_status != before.bridges_status:
             self.play_sfx('switch')
-            self.add_trauma(0.35)
         if after.orientation == Orientation.SPLIT and before.orientation != Orientation.SPLIT:
             self.play_sfx('split')
-            self.add_trauma(0.35)
         elif before.orientation == Orientation.SPLIT and after.orientation != Orientation.SPLIT:
             self.play_sfx('split')
-            self.add_trauma(0.48)
             mid_r = (after.pos1[0] + after.pos2[0]) / 2.0
             mid_c = (after.pos1[1] + after.pos2[1]) / 2.0
             self.shockwave = (mid_r, mid_c, 0.0)
@@ -244,7 +236,7 @@ class BloxorzApp:
         self.solver_status = SolverStatus.IDLE
         self.message = 'You fell off the board!'
         self.play_sfx('fall')
-        self.add_trauma(0.85)
+        self.add_trauma(0.12)
         if self.animate:
             self.animation.duration_sec = self.FALL_SECONDS
             self.animation.start(before, fallen, action, falling=True)
@@ -270,7 +262,6 @@ class BloxorzApp:
             self.animation.duration_sec = self.WIN_SECONDS
             self.animation.start(goal, goal, self.actions[-1], sinking=True)
             self.win_phase = 'sink'
-            self.add_trauma(0.38)
             self.message = 'Stage complete!'
             return
         if self.win_phase == 'sink' and self.animate:
