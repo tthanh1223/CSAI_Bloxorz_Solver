@@ -77,8 +77,12 @@ def draw(app):
     return True
 
 
+_CONFETTI_CACHE = {}
+_FROSTED_GLASS_CACHE = {}
+
+
 def draw_confetti(screen, ticks, w, h):
-    """Silky smooth 60 FPS physics celebratory confetti particle explosion."""
+    """Silky smooth 60 FPS physics celebratory confetti particle explosion with pre-cached sprites."""
     confetti_colors = (
         (255, 185, 205),  # Pastel Rose Pink
         (255, 215, 60),   # Radiant Gold
@@ -106,18 +110,31 @@ def draw_confetti(screen, ticks, w, h):
         pw = max(1, int(11 * abs(flip)))
         ph = 7
 
-        conf_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
-        conf_surf.fill((*col, 220))
-        if pw > 4:
-            pygame.draw.line(conf_surf, (255, 255, 255, 180), (0, 0), (pw, 0), 1)
+        c_key = (col, pw, ph)
+        conf_surf = _CONFETTI_CACHE.get(c_key)
+        if conf_surf is None:
+            conf_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+            conf_surf.fill((*col, 220))
+            if pw > 4:
+                pygame.draw.line(conf_surf, (255, 255, 255, 180), (0, 0), (pw, 0), 1)
+            _CONFETTI_CACHE[c_key] = conf_surf
         screen.blit(conf_surf, (x - pw // 2, y - ph // 2))
 
 
-def draw_frosted_glass_panel(screen: pygame.Surface, rect: pygame.Rect, style: str, border_radius: int = 22) -> None:
+def draw_frosted_glass_panel(screen: pygame.Surface, rect: pygame.Rect, style: str, border_radius: int = 22, app=None) -> None:
     """Render authentic optical-blur frosted glass panel with specular highlights and soft shadow."""
     rect = rect.clamp(screen.get_rect())
     w, h = rect.size
     if w <= 8 or h <= 8:
+        return
+
+    stage_id = getattr(app, 'stage_index', 0) if app else 0
+    cache_key = (w, h, rect.topleft, style, border_radius, stage_id)
+    cached = _FROSTED_GLASS_CACHE.get(cache_key)
+    if cached is not None:
+        blurred, bot_shadow = cached
+        screen.blit(bot_shadow, (rect.x, rect.bottom))
+        screen.blit(blurred, rect.topleft)
         return
 
     # 1. Optical Background Blur: sample current scene pixels before drawing shadow
@@ -139,7 +156,6 @@ def draw_frosted_glass_panel(screen: pygame.Surface, rect: pygame.Rect, style: s
     for sy in range(8):
         a = int(34 * (1.0 - sy / 8.0) ** 1.5)
         pygame.draw.line(bot_shadow, (0, 0, 0, a), (border_radius, sy), (w - border_radius, sy))
-    screen.blit(bot_shadow, (rect.x, rect.bottom))
 
     # 3. Translucent Frosted Glass Tint & Specular Rim Light
     tint = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -166,6 +182,10 @@ def draw_frosted_glass_panel(screen: pygame.Surface, rect: pygame.Rect, style: s
         pygame.draw.line(tint, specular_col, (border_radius, 1), (w - border_radius, 1), 1)
 
     blurred.blit(tint, (0, 0))
+    if len(_FROSTED_GLASS_CACHE) > 16:
+        _FROSTED_GLASS_CACHE.clear()
+    _FROSTED_GLASS_CACHE[cache_key] = (blurred, bot_shadow)
+    screen.blit(bot_shadow, (rect.x, rect.bottom))
     screen.blit(blurred, rect.topleft)
 
 
@@ -194,14 +214,20 @@ def _draw(app):
     forest = style in ('forest', 'forest_gl')
     screen.blit(scene(app), (0, 0))
 
-    # Top navigation veil
-    veil = pygame.Surface((w, 80), pygame.SRCALPHA)
-    for yy in range(80):
-        pygame.draw.line(veil, (253, 222, 209, round(225 * (1 - yy / 80) ** .45)), (0, yy), (w, yy))
-    if style == 'dream':
-        screen.blit(veil, (0, 0))
-    elif forest:
-        veil.fill((14, 27, 20, 110))
+    # Top navigation veil (pre-cached)
+    veil_cache = getattr(app, '_veil_cache', None)
+    if veil_cache is None or veil_cache[0] != (w, style):
+        veil = pygame.Surface((w, 80), pygame.SRCALPHA)
+        if style == 'dream':
+            for yy in range(80):
+                pygame.draw.line(veil, (253, 222, 209, round(225 * (1 - yy / 80) ** .45)), (0, yy), (w, yy))
+        elif forest:
+            veil.fill((14, 27, 20, 110))
+        app._veil_cache = ((w, style), veil)
+    else:
+        veil = veil_cache[1]
+
+    if style == 'dream' or forest:
         screen.blit(veil, (0, 0))
     else:
         pygame.draw.line(screen, T.LINE, (24, 78), (w - 24, 78))
@@ -246,30 +272,39 @@ def _draw(app):
         card_h += 8
     card_h = min(card_h, h - 96)
 
-    # Right panel frosted glass container
+    # Right panel frosted glass container (optical blur cached)
     card_rect = pygame.Rect(panel_x - 16, 80, T.PANEL_WIDTH + 32, card_h)
-    draw_frosted_glass_panel(screen, card_rect, style, border_radius=22)
+    draw_frosted_glass_panel(screen, card_rect, style, border_radius=22, app=app)
 
-    # High-contrast frosted glass container badge for logo & move counter
+    # High-contrast frosted glass container badge for logo & move counter (pre-cached)
     badge_rect = pygame.Rect(20, 10, 192, 58)
-    badge = pygame.Surface(badge_rect.size, pygame.SRCALPHA)
+    badge_cache = getattr(app, '_badge_cache', None)
+    if badge_cache is None or badge_cache[0] != style:
+        badge = pygame.Surface(badge_rect.size, pygame.SRCALPHA)
+        if style == 'blueprint':
+            pygame.draw.rect(badge, (12, 32, 52, 230), badge.get_rect(), border_radius=16)
+            pygame.draw.rect(badge, (56, 142, 185, 190), badge.get_rect(), 1, border_radius=16)
+        elif forest:
+            pygame.draw.rect(badge, (16, 28, 20, 235), badge.get_rect(), border_radius=16)
+            pygame.draw.rect(badge, (76, 115, 86, 185), badge.get_rect(), 1, border_radius=16)
+        else:  # dream city
+            pygame.draw.rect(badge, (255, 246, 250, 235), badge.get_rect(), border_radius=16)
+            pygame.draw.rect(badge, (228, 182, 198, 210), badge.get_rect(), 1, border_radius=16)
+            pygame.draw.line(badge, (255, 255, 255, 180), (16, 1), (badge_rect.w - 16, 1), 1)
+        app._badge_cache = (style, badge)
+    else:
+        badge = badge_cache[1]
+    screen.blit(badge, badge_rect.topleft)
+
     if style == 'blueprint':
-        pygame.draw.rect(badge, (12, 32, 52, 230), badge.get_rect(), border_radius=16)
-        pygame.draw.rect(badge, (56, 142, 185, 190), badge.get_rect(), 1, border_radius=16)
         title_col = (245, 250, 255)
         moves_col = (145, 210, 240)
     elif forest:
-        pygame.draw.rect(badge, (16, 28, 20, 235), badge.get_rect(), border_radius=16)
-        pygame.draw.rect(badge, (76, 115, 86, 185), badge.get_rect(), 1, border_radius=16)
         title_col = (250, 245, 235)
         moves_col = (200, 225, 180)
     else:  # dream city
-        pygame.draw.rect(badge, (255, 246, 250, 235), badge.get_rect(), border_radius=16)
-        pygame.draw.rect(badge, (228, 182, 198, 210), badge.get_rect(), 1, border_radius=16)
-        pygame.draw.line(badge, (255, 255, 255, 180), (16, 1), (badge_rect.w - 16, 1), 1)
         title_col = (46, 32, 42)
         moves_col = (112, 82, 98)
-    screen.blit(badge, badge_rect.topleft)
 
     label('B L O X O R Z', badge_rect.x + 18, badge_rect.y + 7, title_col, f=heading)
     label(f'{app.session.moves} MOVES', badge_rect.x + 20, badge_rect.y + 35, moves_col, f=caption)
