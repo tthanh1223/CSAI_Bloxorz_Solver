@@ -485,37 +485,6 @@ class IsometricRenderer:
                         pa = (top_p[0] + (bot_p[0] - top_p[0]) * t1, top_p[1] + (bot_p[1] - top_p[1]) * t1)
                         pb = (top_p[0] + (bot_p[0] - top_p[0]) * t2, top_p[1] + (bot_p[1] - top_p[1]) * t2)
                         pygame.draw.line(self._base, (64, 168, 196, 75), pa, pb, 1)
-        elif self.style == 'dream':
-            # Roman stone foundation & architectural piers descending into clouds (Image 2)
-            for r, c in active_cells:
-                fp = [self.project((r + dr, c + dc, -0.42)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                pygame.draw.polygon(self._base, (172, 130, 142, 45), fp)
-
-            piers = [cell for cell in active_cells if (cell[0] % 2 == 0 and cell[1] % 2 == 0)]
-            if not piers:
-                piers = active_cells[::3]
-            for r, c in piers:
-                p_top = [self.project((r + 0.16 + dr * 0.68, c + 0.16 + dc * 0.68, -0.32)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                p_bot = [self.project((r + 0.20 + dr * 0.60, c + 0.20 + dc * 0.60, -2.4)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                pygame.draw.polygon(self._base, (230, 204, 202, 115), [p_top[0], p_top[1], p_bot[1], p_bot[0]])
-                pygame.draw.polygon(self._base, (198, 166, 172, 135), [p_top[1], p_top[2], p_bot[2], p_bot[1]])
-                cap = [self.project((r + 0.10 + dr * 0.80, c + 0.10 + dc * 0.80, -0.65)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                pygame.draw.polygon(self._base, (244, 222, 218, 140), cap)
-        elif self.style == 'forest':
-            # Ancient weathered stone monolith piers descending into misty ravine (Image 4)
-            for r, c in active_cells:
-                fp = [self.project((r + dr, c + dc, -0.45)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                pygame.draw.polygon(self._base, (18, 28, 22, 75), fp)
-
-            piers = [cell for cell in active_cells if (cell[0] % 2 == 0 and cell[1] % 2 == 0)]
-            if not piers:
-                piers = active_cells[::3]
-            for r, c in piers:
-                p_top = [self.project((r + 0.18 + dr * 0.64, c + 0.18 + dc * 0.64, -0.32)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                p_bot = [self.project((r + 0.22 + dr * 0.56, c + 0.22 + dc * 0.56, -2.6)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-                pygame.draw.polygon(self._base, (64, 82, 60, 140), [p_top[0], p_top[1], p_bot[1], p_bot[0]])
-                pygame.draw.polygon(self._base, (44, 60, 42, 170), [p_top[1], p_top[2], p_bot[2], p_bot[1]])
-
         commands=[]
         holes=[]
         tile_outlines=[]
@@ -549,14 +518,20 @@ class IsometricRenderer:
                 else:pygame.draw.polygon(self._base,ink,pts)
             elif kind=='marker':self._marker(self._base,*payload)
             else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
-        seam = {'dream': (202, 178, 184), 'blueprint': (48, 112, 140), 'forest': (96, 108, 82)}.get(self.style, (168, 174, 163))
+        seam = {'dream': (202, 178, 184), 'blueprint': (48, 112, 140), 'forest': (102, 112, 80)}.get(self.style, (168, 174, 163))
         seams = pygame.Surface(self.size, pygame.SRCALPHA)
         for outline in tile_outlines:
             pygame.draw.aalines(seams, (*seam, 165), True, outline)
         self._base.blit(seams, (0, 0))
+        if self.style == 'forest':
+            self._moss_edges(shown)
 
         # Pre-render individual tile sprites for 60 FPS lag-free assembly and disassembly
         self._tile_sprites = []
+        grid = self.stage.grid
+        r_mid = len(grid) / 2.0
+        c_mid = len(grid[0]) / 2.0
+        max_d = max(1.0, (r_mid ** 2 + c_mid ** 2) ** 0.5)
         for r, row in enumerate(self.stage.grid):
             for c, tile in enumerate(row):
                 coord = (r, c)
@@ -594,7 +569,14 @@ class IsometricRenderer:
                 if label:
                     self._marker(tile_surf, (r + .5, c + .5, .01), label, offset=(min_x, min_y))
                 tile_depth = self.camera.depth(r + .5, c + .5, 0)
-                self._tile_sprites.append((tile_depth, tile_surf, (min_x, min_y), (r, c)))
+                d = ((r - r_mid) ** 2 + (c - c_mid) ** 2) ** 0.5
+                delay = (d / max_d) * 0.22
+                seed = r * 137 + c * 89
+                theta_base = (seed % 360) * pi / 180.0 + (seed % 5) * 0.3
+                radius_base = 160.0 + (seed % 8) * 20.0
+                self._tile_sprites.append((tile_depth, tile_surf, (min_x, min_y), (r, c), delay, theta_base, radius_base))
+
+        self._tile_sprites.sort(key=lambda it: it[0])
 
         # Retain a bounded number of full-size buffers, never one per state.
         self._frame=pygame.Surface(self.size,pygame.SRCALPHA)
@@ -671,6 +653,20 @@ class IsometricRenderer:
         pts = [(round(x), round(y)) for x, y in points]
         if not self._can_texture(surface, pts):
             return
+        if self.style == 'forest' and getattr(self, 'gold_texture', None) is not None:
+            c_quant = tuple(min(255, round(v / 8) * 8) for v in color)
+            texture = self._block_textures.get(c_quant)
+            if texture is None:
+                texture = pygame.Surface((64, 128), pygame.SRCALPHA)
+                texture.blit(pygame.transform.smoothscale(self.gold_texture, (64, 128)), (0, 0))
+                strength = min(1.0, sum(color) / max(1, sum(self.BLOCK)))
+                texture.fill((int(255 * strength),) * 3, special_flags=pygame.BLEND_RGB_MULT)
+                self._block_textures[c_quant] = texture
+            if self._can_texture(surface, pts):
+                pygame.gfxdraw.textured_polygon(surface, pts, texture, pts[0][0], pts[0][1])
+            self._outline(surface, color, pts, cut)
+            return
+
         pygame.draw.polygon(surface, color, pts)
         if len(pts) >= 4 and pts[1][1] <= pts[2][1]:
             sheen = tuple(min(255, c + 42) for c in color)
@@ -734,13 +730,7 @@ class IsometricRenderer:
         if intro_t is not None:
             # Map Assembly Intro (silky smooth pre-baked tile sprites rising from below at 60 FPS)
             self._frame.fill((0, 0, 0, 0))
-            grid = self.stage.grid
-            r_mid = len(grid) / 2.0
-            c_mid = len(grid[0]) / 2.0
-            max_d = max(1.0, (r_mid ** 2 + c_mid ** 2) ** 0.5)
-            for depth, spr, (x0, y0), (r, c) in sorted(self._tile_sprites, key=lambda it: it[0]):
-                d = ((r - r_mid) ** 2 + (c - c_mid) ** 2) ** 0.5
-                delay = (d / max_d) * 0.22
+            for depth, spr, (x0, y0), (r, c), delay, _, _ in self._tile_sprites:
                 p = max(0.0, min(1.0, (intro_t - delay) / 0.55))
                 ease = 1.0 - (1.0 - p) ** 3
                 dy = int(110 * (1.0 - ease))
@@ -768,17 +758,16 @@ class IsometricRenderer:
             # Map Disassembly Outro (silky smooth chaotic swirling orbit at 60 FPS)
             self._frame.fill((0, 0, 0, 0))
             p = min(1.0, max(0.0, outro_t))
-            for depth, spr, (x0, y0), (r, c) in sorted(self._tile_sprites, key=lambda it: it[0]):
-                seed = r * 137 + c * 89
-                theta = (seed % 360) * pi / 180.0 + p * 3.8 + (seed % 5) * 0.3
-                radius = p * (160.0 + (seed % 8) * 20.0)
+            for depth, spr, (x0, y0), (r, c), delay, theta_base, radius_base in self._tile_sprites:
+                theta = theta_base + p * 3.8
+                radius = p * radius_base
                 dx = int(cos(theta) * radius)
                 dy = int(sin(theta) * radius * 0.65 + p * p * 90.0)
-                alpha = int(255 * max(0.0, 1.0 - p * 1.5))
+                alpha = int(255 * max(0.0, 1.0 - p * 1.4))
                 if alpha > 0:
-                    tile_copy = spr.copy()
-                    tile_copy.set_alpha(alpha)
-                    self._frame.blit(tile_copy, (x0 + dx, y0 + dy))
+                    spr.set_alpha(alpha)
+                    self._frame.blit(spr, (x0 + dx, y0 + dy))
+                    spr.set_alpha(255)
 
             surface.fill((0, 0, 0, 0) if surface.get_flags() & pygame.SRCALPHA else self.BACKGROUND)
             surface.blit(self._frame, (0, 0))
@@ -874,6 +863,10 @@ class IsometricRenderer:
 
     def _paint_material(self, surface, points, color):
         pygame.draw.polygon(surface, color, points)
+        if self.style == 'forest' and getattr(self, 'stone_texture', None) is not None:
+            self._stone_material(surface, points, color)
+            return
+
         if len(points) >= 4:
             highlight = tuple(min(255, c + 24) for c in color)
             shadow = tuple(max(0, c - 20) for c in color)
@@ -899,15 +892,51 @@ class IsometricRenderer:
                 pygame.draw.aaline(surface, paver_light, bot_p, left_p)
                 pygame.draw.aaline(surface, paver_light, left_p, top_p)
                 pygame.draw.circle(surface, paver_dim, (round(cx), round(cy)), 1)
-            elif self.style == 'forest':
-                # Ancient weathered stone slab incision (Image 4)
-                stone_groove = (max(0, color[0] - 22), max(0, color[1] - 20), max(0, color[2] - 22))
-                inset_pts = [((p[0] - cx) * 0.72 + cx, (p[1] - cy) * 0.72 + cy) for p in points]
-                pygame.draw.aalines(surface, stone_groove, True, inset_pts)
             elif self.style == 'blueprint':
                 tick_color = (min(255, color[0] + 32), min(255, color[1] + 38), min(255, color[2] + 42))
                 for p in points:
                     pygame.draw.circle(surface, tick_color, (round(p[0]), round(p[1])), 1)
+
+    def _stone_material(self, surface, points, color):
+        width, height = surface.get_size()
+        a, b, _, d = points
+        top = abs((b[1] - a[1]) + (d[1] - a[1])) > 1 and abs(b[1] - d[1]) < 2
+        source = pygame.transform.rotate(self.stone_texture, 45) if top else self.stone_texture
+        texture = pygame.transform.smoothscale(source, (width, height))
+        brightness = min(1.0, sum(color) / max(1, sum(self.FLOOR)))
+        texture.fill((int(brightness * 255),) * 3, special_flags=pygame.BLEND_RGB_MULT)
+        mask = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        pygame.draw.polygon(mask, (255, 255, 255, 255), points)
+        rgba = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        rgba.blit(texture, (0, 0))
+        rgba.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        surface.blit(rgba, (0, 0))
+
+    def _moss_edges(self, shown):
+        """Baked hanging moss only along exposed front-facing edges."""
+        rng = random.Random(842)
+        cells = set()
+        for r, row in enumerate(self.stage.grid):
+            for c, tile in enumerate(row):
+                bridge = self.bridge_cells.get((r, c))
+                if bridge is not None:
+                    if bridge < len(shown.bridges_status) and shown.bridges_status[bridge]:
+                        cells.add((r, c))
+                elif tile != TileType.VOID:
+                    cells.add((r, c))
+        for r, c in cells:
+            for neighbor, start, end in (((r + 1, c), (r + 1, c), (r + 1, c + 1)), ((r, c + 1), (r, c + 1), (r + 1, c + 1))):
+                if neighbor in cells:
+                    continue
+                for _ in range(7):
+                    t = rng.random()
+                    rr = start[0] + (end[0] - start[0]) * t
+                    cc = start[1] + (end[1] - start[1]) * t
+                    x, y = self.project((rr, cc, -.05))
+                    length = rng.uniform(.05, .28) * self.camera.tile_width * self.zoom
+                    for i in range(max(2, int(length / 3))):
+                        pygame.draw.circle(self._base, rng.choice(((64, 80, 30), (90, 109, 39), (120, 131, 54))),
+                                           (round(x + rng.uniform(-2, 2)), round(y + i * 3)), max(1, round(self.zoom * 1.4)))
 
     def _marker(self, surface, point, kind, offset=(0, 0)):
         r, c, z = point
@@ -917,18 +946,25 @@ class IsometricRenderer:
             return (p[0] - ox, p[1] - oy)
 
         if kind == 'goal':
-            # Recessed void portal with glowing neon rim and inner depth
             hole = [project(-.36, -.36), project(-.36, .36), project(.36, .36), project(.36, -.36)]
             pygame.draw.polygon(surface, (10, 14, 20), hole)
-            # Inner wall depth
             inner = [(x, y + self.camera.tile_width * 0.16 * self.zoom) for x, y in hole]
             pygame.draw.polygon(surface, (28, 36, 48), [hole[0], hole[1], inner[1], inner[0]])
             pygame.draw.polygon(surface, (18, 24, 34), [hole[0], inner[0], inner[3], hole[3]])
-            # Glowing neon gold/amber outer rim
-            accent = (248, 172, 72) if self.style != 'forest' else (210, 182, 85)
-            pygame.draw.aalines(surface, accent, True, hole)
-            outer = [project(-.40, -.40), project(-.40, .40), project(.40, .40), project(.40, -.40)]
-            pygame.draw.aalines(surface, (accent[0], accent[1], accent[2]), True, outer)
+            if self.style == 'forest':
+                pygame.draw.aalines(surface, (250, 231, 212), True, hole)
+                rim = [project(-.4, -.4), project(-.4, .4), project(.4, .4), project(.4, -.4)]
+                pygame.draw.aalines(surface, (180, 156, 91), True, rim)
+                for i in range(4):
+                    a, b = rim[i], rim[(i + 1) % 4]
+                    for t in (.16, .34, .52, .7, .88):
+                        x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+                        pygame.draw.circle(surface, (94, 103, 76), (round(x), round(y)), 1)
+            else:
+                accent = (248, 172, 72)
+                pygame.draw.aalines(surface, accent, True, hole)
+                outer = [project(-.40, -.40), project(-.40, .40), project(.40, .40), project(.40, -.40)]
+                pygame.draw.aalines(surface, accent, True, outer)
 
         elif kind == 'O':
             # SOFT SWITCH: Raised circular tactile button with illuminated amber core

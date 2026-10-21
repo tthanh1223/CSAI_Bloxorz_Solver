@@ -110,19 +110,21 @@ def blueprint(size, cells, stage_index):
         label('ISOMETRIC', badge_cx + 42, badge_cy - 10)
         label('VIEW', badge_cx + 42, badge_cy + 4)
 
-    label('ARCHITECTURAL MODEL', 72, 120)
-    label('SCALE  1 : 1', 72, 138)
+    base_x = 48
+    base_y = max(120, h - 185)
+    label('ARCHITECTURAL MODEL', base_x, base_y)
+    label('SCALE  1 : 1', base_x, base_y + 16)
 
     if cells:
         rmin = min(r for r, c in cells)
         cmin = min(c for r, c in cells)
         span = max(max(r for r, c in cells) - rmin + 1, max(c for r, c in cells) - cmin + 1)
-        unit = min(11, 88 // max(1, span))
-        grid_top = 162
+        unit = min(9, 72 // max(1, span))
+        grid_top = base_y + 36
         for r, c in cells:
-            pygame.draw.rect(result, (72, 140, 168), (72 + (c - cmin) * unit, grid_top + (r - rmin) * unit, unit, unit), 1)
+            pygame.draw.rect(result, (72, 140, 168), (base_x + (c - cmin) * unit, grid_top + (r - rmin) * unit, unit, unit), 1)
         grid_bottom = grid_top + (max(r for r, c in cells) - rmin + 1) * unit
-        label(f'STAGE  {stage_index + 1:02}  (REFERENCE)', 72, grid_bottom + 8)
-        label('FLOOR PLAN', 72, grid_bottom + 22)
+        label(f'STAGE  {stage_index + 1:02}  (REFERENCE)', base_x, grid_bottom + 8)
+        label('FLOOR PLAN', base_x, grid_bottom + 22)
 
     return result

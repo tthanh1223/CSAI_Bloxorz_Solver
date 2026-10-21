@@ -37,17 +37,21 @@ def draw(app):
               pygame.time.get_ticks() // 100 if app.busy else 0)
     board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan))
     cached = getattr(app, '_presentation_cache', None)
-    if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open):
-        if cached[1] == board_key:
+    animating_board = getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
+    if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
+        if not animating_board and cached[1] == board_key:
             return False
         app.screen.blit(cached[2], (0, 0))
         rect = app.board_rect
         app.screen.blit(scene(app), rect, rect)
         board = app._board_surface
         app.renderer.zoom, app.renderer.pan = app.zoom, tuple(app.pan)
-        app.renderer.draw(board, app.session.current_state, app.animation.frame)
+        app.renderer.high_contrast = app.high_contrast
+        app.renderer.draw(board, app.session.current_state, app.animation.frame,
+                          intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None))
         app.screen.blit(board, rect)
-        app._presentation_cache = (ui_key, board_key, cached[2])
+        if not animating_board:
+            app._presentation_cache = (ui_key, board_key, cached[2])
         return True
     _draw(app)
     app._presentation_cache = (ui_key, board_key, app.screen.copy())

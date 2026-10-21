@@ -40,20 +40,20 @@ BLUEPRINT = (
 )
 
 FOREST = (
-    (24, 36, 28),     # BG (deep emerald jungle canopy)
-    (18, 28, 22),     # PANEL
-    (34, 48, 38),     # SURFACE
-    (48, 66, 52),     # HOVER
-    (58, 78, 62),     # PRESSED
-    (242, 238, 214),  # TEXT (ivory rune #EFEBD0)
-    (168, 184, 152),  # MUTED
-    (96, 114, 90),    # DISABLED
-    (58, 78, 60),     # LINE
-    (201, 164, 59),   # ACCENT (antique relic gold #C9A43B)
-    (226, 188, 82),   # ACCENT_HOVER
-    (18, 28, 20),     # INK
-    (178, 198, 172),  # FLOOR (luminous weathered temple stone)
-    (224, 182, 64),   # BLOCK (relic antique gold)
+    (34, 47, 39),     # BG
+    (19, 31, 25),     # PANEL
+    (40, 54, 44),     # SURFACE
+    (55, 70, 48),     # HOVER
+    (63, 79, 52),     # PRESSED
+    (239, 235, 205),  # TEXT
+    (181, 191, 160),  # MUTED
+    (113, 129, 107),  # DISABLED
+    (75, 91, 72),     # LINE
+    (220, 186, 91),   # ACCENT
+    (240, 208, 111),  # ACCENT_HOVER
+    (27, 37, 25),     # INK
+    (164, 170, 146),  # FLOOR
+    (222, 173, 62),   # BLOCK
 )
 
 PALETTES = {
