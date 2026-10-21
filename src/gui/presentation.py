@@ -4,6 +4,7 @@ import pygame
 from src.gui import theme as T
 from src.gui.ui import Button, text
 from src.gui.contracts import ReplayStatus, SolverStatus
+from src.engine.state import Orientation
 from src.gui.dreamscape import background
 
 
@@ -42,7 +43,8 @@ def draw(app):
               bool(app.actions), hovered, hovered_metrics, pygame.mouse.get_pressed(), slider_state,
               time_tick)
     animating_board = (getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
-                       or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None)
+                       or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
+                       or app.session.current_state.orientation == Orientation.SPLIT)
     board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan), animating_board)
     cached = getattr(app, '_presentation_cache', None)
     if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
@@ -51,10 +53,10 @@ def draw(app):
         app.screen.blit(cached[2], (0, 0))
         rect = app.board_rect
         if getattr(app, 'trauma', 0.0) > 0.01:
-            shake = app.trauma ** 2
+            intensity = app.trauma ** 1.3
             ticks = pygame.time.get_ticks()
-            shake_x = int(math.sin(ticks * 0.052) * 5.0 * shake)
-            shake_y = int(math.cos(ticks * 0.071) * 3.8 * shake)
+            shake_x = round(math.sin(ticks * 0.048) * 12.0 * intensity + math.sin(ticks * 0.12) * 4.0 * intensity)
+            shake_y = round(math.cos(ticks * 0.062) * 9.0 * intensity + math.cos(ticks * 0.14) * 3.0 * intensity)
             rect = app.board_rect.move(shake_x, shake_y)
         app.screen.blit(scene(app), rect, rect)
         board = app._board_surface
@@ -158,10 +160,10 @@ def _draw(app):
                       shockwave=getattr(app, 'shockwave', None))
     draw_rect = app.board_rect
     if getattr(app, 'trauma', 0.0) > 0.01:
-        shake = app.trauma ** 2
+        intensity = app.trauma ** 1.3
         ticks = pygame.time.get_ticks()
-        shake_x = int(math.sin(ticks * 0.052) * 5.0 * shake)
-        shake_y = int(math.cos(ticks * 0.071) * 3.8 * shake)
+        shake_x = round(math.sin(ticks * 0.048) * 12.0 * intensity + math.sin(ticks * 0.12) * 4.0 * intensity)
+        shake_y = round(math.cos(ticks * 0.062) * 9.0 * intensity + math.cos(ticks * 0.14) * 3.0 * intensity)
         draw_rect = app.board_rect.move(shake_x, shake_y)
     screen.blit(board, draw_rect)
 

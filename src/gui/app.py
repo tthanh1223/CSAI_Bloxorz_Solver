@@ -210,19 +210,21 @@ class BloxorzApp:
         if action != Action.SPACE:
             self.play_sfx('roll')
             if after.orientation != Orientation.STANDING and after.orientation != Orientation.SPLIT:
-                self.add_trauma(0.18)
+                self.add_trauma(0.42)
             else:
-                self.add_trauma(0.08)
+                self.add_trauma(0.22)
         else:
             self.play_sfx('switch')
+            self.add_trauma(0.20)
         if after.bridges_status != before.bridges_status:
             self.play_sfx('switch')
+            self.add_trauma(0.35)
         if after.orientation == Orientation.SPLIT and before.orientation != Orientation.SPLIT:
             self.play_sfx('split')
-            self.add_trauma(0.25)
+            self.add_trauma(0.35)
         elif before.orientation == Orientation.SPLIT and after.orientation != Orientation.SPLIT:
             self.play_sfx('split')
-            self.add_trauma(0.35)
+            self.add_trauma(0.48)
             mid_r = (after.pos1[0] + after.pos2[0]) / 2.0
             mid_c = (after.pos1[1] + after.pos2[1]) / 2.0
             self.shockwave = (mid_r, mid_c, 0.0)
@@ -242,7 +244,7 @@ class BloxorzApp:
         self.solver_status = SolverStatus.IDLE
         self.message = 'You fell off the board!'
         self.play_sfx('fall')
-        self.add_trauma(0.55)
+        self.add_trauma(0.85)
         if self.animate:
             self.animation.duration_sec = self.FALL_SECONDS
             self.animation.start(before, fallen, action, falling=True)
@@ -477,7 +479,7 @@ class BloxorzApp:
     def update(self, dt):
         self.animation.update(dt)
         if getattr(self, 'trauma', 0.0) > 0.0:
-            self.trauma = max(0.0, self.trauma - dt * 2.8)
+            self.trauma = max(0.0, self.trauma - dt * 1.8)
         if getattr(self, 'shockwave', None) is not None:
             r, c, st = self.shockwave
             st += dt
