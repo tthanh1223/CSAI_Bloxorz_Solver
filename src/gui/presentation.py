@@ -44,9 +44,10 @@ def draw(app):
               app.stage_picker, app.picker_page, app.menu, app.dropdown_open, app.sound_enabled, app.animate,
               bool(app.actions), hovered, hovered_metrics, pygame.mouse.get_pressed(), slider_state,
               time_tick)
+    animating_idle_beacon = (app.animation.frame is None and not bool(app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'))
     animating_board = (getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
                        or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
-                       or is_split)
+                       or is_split or animating_idle_beacon)
     board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan), animating_board)
     cached = getattr(app, '_presentation_cache', None)
     if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
