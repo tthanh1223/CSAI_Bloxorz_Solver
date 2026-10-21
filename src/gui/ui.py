@@ -22,16 +22,23 @@ def draw_vector_icon(surface, name, center, color, size=16):
     hs = size / 2
 
     if name in ('undo', 'rewind'):
-        # Curved loop counter-clockwise arrow
-        r = hs * 0.8
-        arc_rect = pygame.Rect(cx - r, cy - r + 1, 2 * r, 2 * r)
-        pygame.draw.arc(surface, color, arc_rect, math.pi * 0.25, math.pi * 1.55, 2)
-        tip_x, tip_y = cx - r + 1, cy + 1
+        # Crisp modern undo arrow: pointing left, rounded curve sweeping down-right
+        tip_x, tip_y = cx - 5, cy - 2
         pygame.draw.polygon(surface, color, [
-            (tip_x - 3, tip_y + 4),
-            (tip_x + 4, tip_y),
-            (tip_x - 3, tip_y - 4),
+            (tip_x, tip_y),
+            (tip_x + 5, tip_y - 4),
+            (tip_x + 5, tip_y + 4)
         ])
+        pygame.draw.line(surface, color, (tip_x + 4, tip_y), (cx + 1, tip_y), 2)
+        r = 4.0
+        curve_pts = []
+        for i in range(9):
+            ang = math.pi * 0.5 - (math.pi * 0.5) * (i / 8)
+            px = cx + 1 + r * math.cos(ang)
+            py = tip_y + r - r * math.sin(ang)
+            curve_pts.append((round(px), round(py)))
+        pygame.draw.lines(surface, color, False, curve_pts, 2)
+        pygame.draw.line(surface, color, (cx + 1 + round(r), tip_y + round(r)), (cx + 1 + round(r), cy + 4), 2)
 
     elif name in ('restart', 'refresh'):
         # Clockwise 3/4 circle refresh arrow
@@ -197,14 +204,19 @@ class Button:
                     if h_t < 0.02:
                         color = None
                     else:
-                        color = tuple((*theme.ACCENT[:3], int(28 * h_t)))
+                        color = tuple((*theme.ACCENT_HOVER[:3], int(60 * h_t)))
                 base_fg = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
                 bright_fg = theme.ACCENT if self.selected else (tuple(min(255, c + 40) for c in theme.TEXT) if self.enabled else theme.DISABLED)
                 foreground = lerp_color(base_fg, bright_fg, h_t)
 
         # Draw tactile background
         if color:
-            pygame.draw.rect(surface, color, draw_rect, border_radius=radius)
+            if len(color) == 4 and color[3] < 255 and not (surface.get_flags() & pygame.SRCALPHA):
+                col_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+                pygame.draw.rect(col_surf, color, col_surf.get_rect(), border_radius=radius)
+                surface.blit(col_surf, draw_rect)
+            else:
+                pygame.draw.rect(surface, color, draw_rect, border_radius=radius)
 
             if self.kind == 'primary' and self.enabled:
                 # Polished glass top shine highlight
@@ -225,8 +237,10 @@ class Button:
                 border_color = lerp_color(theme.LINE, theme.ACCENT, h_t) if (self.enabled and h_t > 0) else theme.LINE
                 pygame.draw.rect(surface, border_color, draw_rect, 1, border_radius=radius)
             elif self.kind == 'quiet' and h_t > 0.05:
-                quiet_border = (*theme.ACCENT[:3], int(150 * h_t))
-                pygame.draw.rect(surface, quiet_border, draw_rect, 1, border_radius=radius)
+                quiet_border = (*theme.ACCENT[:3], int(130 * h_t))
+                col_b = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+                pygame.draw.rect(col_b, quiet_border, col_b.get_rect(), 1, border_radius=radius)
+                surface.blit(col_b, draw_rect)
 
         if self.selected and self.kind != 'dock_item':
             pygame.draw.rect(surface, theme.ACCENT, draw_rect, 1, border_radius=12)

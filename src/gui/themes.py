@@ -9,14 +9,14 @@ DREAM = (
     (243, 196, 192),  # BG
     (255, 248, 244),  # PANEL
     (250, 237, 233),  # SURFACE
-    (246, 222, 216),  # HOVER
-    (238, 206, 201),  # PRESSED
+    (253, 238, 236),  # HOVER (delicate creamy pastel)
+    (246, 218, 224),  # PRESSED
     (86, 56, 74),     # TEXT
     (132, 98, 116),   # MUTED
     (186, 160, 172),  # DISABLED
     (235, 212, 210),  # LINE
-    (236, 120, 154),  # ACCENT (sparkly rose pink)
-    (248, 146, 178),  # ACCENT_HOVER
+    (242, 166, 192),  # ACCENT (soft dreamy pastel rose)
+    (250, 195, 215),  # ACCENT_HOVER (light pastel blossom)
     (255, 252, 248),  # INK
     (226, 232, 224),  # FLOOR (luminous alabaster terrazzo base matching main)
     (242, 146, 176),  # BLOCK (radiant pastel rose gold)

@@ -681,171 +681,92 @@ class IsometricRenderer:
         pts = [(round(x), round(y)) for x, y in points]
         if not self._can_texture(surface, pts):
             return
-        if self.style == 'forest' and getattr(self, 'gold_texture', None) is not None:
-            c_quant = tuple(min(255, round(v / 8) * 8) for v in color)
-            texture = self._block_textures.get(c_quant)
-            if texture is None:
-                texture = pygame.Surface((64, 128), pygame.SRCALPHA)
-                texture.blit(pygame.transform.smoothscale(self.gold_texture, (64, 128)), (0, 0))
-                strength = min(1.0, sum(color) / max(1, sum(self.BLOCK)))
-                texture.fill((int(255 * strength),) * 3, special_flags=pygame.BLEND_RGB_MULT)
-                self._block_textures[c_quant] = texture
-            if self._can_texture(surface, pts):
-                pygame.gfxdraw.textured_polygon(surface, pts, texture, pts[0][0], pts[0][1])
 
-            # Ancient Relic Ornate Details:
-            if len(pts) == 4:
-                # 1. Gilded Corner Brackets with Ancient Rivets
-                n = 4
-                for i in range(n):
-                    v = pts[i]
-                    p_prev = pts[(i - 1) % n]
-                    p_next = pts[(i + 1) % n]
-                    t_arm = 0.22
-                    b1 = (v[0] + (p_prev[0] - v[0]) * t_arm, v[1] + (p_prev[1] - v[1]) * t_arm)
-                    b2 = (v[0] + (p_next[0] - v[0]) * t_arm, v[1] + (p_next[1] - v[1]) * t_arm)
-                    tri = [(round(v[0]), round(v[1])), (round(b1[0]), round(b1[1])), (round(b2[0]), round(b2[1]))]
-                    pygame.draw.polygon(surface, (230, 185, 82), tri)
-                    pygame.draw.aalines(surface, (255, 235, 145), True, tri)
-                    # Golden corner rivet
-                    rv_x = round(v[0] * 0.70 + (b1[0] + b2[0]) * 0.15)
-                    rv_y = round(v[1] * 0.70 + (b1[1] + b2[1]) * 0.15)
-                    pygame.draw.circle(surface, (70, 50, 15), (rv_x, rv_y), 2)
-                    pygame.draw.circle(surface, (255, 240, 170), (rv_x, rv_y), 1)
+        min_x = min(p[0] for p in pts); max_x = max(p[0] for p in pts)
+        min_y = min(p[1] for p in pts); max_y = max(p[1] for p in pts)
+        bw = max(2, max_x - min_x + 1)
+        bh = max(2, max_y - min_y + 1)
+        strength = min(1.3, max(0.5, sum(color) / 540.0))
 
-                # 2. Tactile center dividing seam with ornate gold inlay for elongated 1x1x2 faces
-                d01 = (pts[1][0] - pts[0][0]) ** 2 + (pts[1][1] - pts[0][1]) ** 2
-                d12 = (pts[2][0] - pts[1][0]) ** 2 + (pts[2][1] - pts[1][1]) ** 2
-                is_elongated = False
-                if d01 > d12 * 2.2:
-                    is_elongated = True
-                    m0 = ((pts[0][0] + pts[1][0]) // 2, (pts[0][1] + pts[1][1]) // 2)
-                    m1 = ((pts[3][0] + pts[2][0]) // 2, (pts[3][1] + pts[2][1]) // 2)
-                elif d12 > d01 * 2.2:
-                    is_elongated = True
-                    m0 = ((pts[1][0] + pts[2][0]) // 2, (pts[1][1] + pts[2][1]) // 2)
-                    m1 = ((pts[0][0] + pts[3][0]) // 2, (pts[0][1] + pts[3][1]) // 2)
+        if self.style == 'forest':
+            # Warm ancient sunlit gold & rich bronze-amber gradient (streamlined, no yellow clutter)
+            c_top = tuple(min(255, int(c * strength)) for c in (255, 240, 172))  # Sunlit luminous gold crown
+            c_mid = tuple(min(255, int(c * strength)) for c in (226, 174, 62))   # Warm radiant amber gold
+            c_bot = tuple(min(255, int(c * strength)) for c in (148, 102, 28))   # Deep burnished bronze
+            edge_color = tuple(min(255, int(c * 1.12)) for c in c_top)
+            sheen_color = (255, 255, 235, 75)
+            sparkle_colors = ((255, 255, 220, 240), (255, 240, 160, 200), (245, 205, 90, 180), (255, 248, 225, 220))
+            seam_dark = (88, 58, 16)
+            seam_light = (255, 238, 145)
 
-                if is_elongated:
-                    pygame.draw.aaline(surface, (245, 205, 95), (m0[0] - 1, m0[1] - 1), (m1[0] - 1, m1[1] - 1))
-                    pygame.draw.aaline(surface, (68, 48, 16), m0, m1)
-                    pygame.draw.aaline(surface, (255, 238, 140), (m0[0] + 1, m0[1] + 1), (m1[0] + 1, m1[1] + 1))
-                    sm_x, sm_y = (m0[0] + m1[0]) // 2, (m0[1] + m1[1]) // 2
-                    clasp = [(sm_x, sm_y - 3), (sm_x + 3, sm_y), (sm_x, sm_y + 3), (sm_x - 3, sm_y)]
-                    pygame.draw.polygon(surface, (245, 215, 105), clasp)
-                    pygame.draw.aalines(surface, (255, 245, 185), True, clasp)
-                else:
-                    cx = sum(p[0] for p in pts) / 4.0
-                    cy = sum(p[1] for p in pts) / 4.0
-                    min_x = min(p[0] for p in pts); max_x = max(p[0] for p in pts)
-                    min_y = min(p[1] for p in pts); max_y = max(p[1] for p in pts)
-                    if (max_x - min_x) > 20 and (max_y - min_y) > 16:
-                        e0 = ((pts[0][0] + pts[1][0]) / 2.0, (pts[0][1] + pts[1][1]) / 2.0)
-                        e1 = ((pts[1][0] + pts[2][0]) / 2.0, (pts[1][1] + pts[2][1]) / 2.0)
-                        e2 = ((pts[2][0] + pts[3][0]) / 2.0, (pts[2][1] + pts[3][1]) / 2.0)
-                        e3 = ((pts[3][0] + pts[0][0]) / 2.0, (pts[3][0] + pts[0][1]) / 2.0)
-                        d_pts = [
-                            (round(cx + (e0[0] - cx) * 0.58), round(cy + (e0[1] - cy) * 0.58)),
-                            (round(cx + (e1[0] - cx) * 0.58), round(cy + (e1[1] - cy) * 0.58)),
-                            (round(cx + (e2[0] - cx) * 0.58), round(cy + (e2[1] - cy) * 0.58)),
-                            (round(cx + (e3[0] - cx) * 0.58), round(cy + (e3[1] - cy) * 0.58)),
-                        ]
-                        pygame.draw.aalines(surface, (72, 50, 18), True, [(x + 1, y + 1) for x, y in d_pts])
-                        pygame.draw.aalines(surface, (255, 225, 115), True, d_pts)
-                        pygame.draw.circle(surface, (255, 240, 160), (round(cx), round(cy)), 2)
-                        pygame.draw.circle(surface, (110, 78, 22), (round(cx), round(cy)), 3, 1)
+        elif self.style == 'blueprint':
+            # Architectural terracotta laser orange gradient matching blueprint technical drafting
+            c_top = tuple(min(255, int(c * strength)) for c in (255, 172, 115))  # Luminous coral terracotta crown
+            c_mid = tuple(min(255, int(c * strength)) for c in (228, 92, 38))    # Vibrant drafting terracotta
+            c_bot = tuple(min(255, int(c * strength)) for c in (148, 48, 20))    # Deep burnt sienna
+            edge_color = (255, 185, 140) if sum(color) > 300 else (210, 110, 60)
+            sheen_color = (255, 225, 205, 80)
+            sparkle_colors = ((255, 240, 230, 230), (255, 200, 165, 200), (255, 160, 110, 180), (255, 250, 245, 210))
+            seam_dark = (68, 20, 10)
+            seam_light = (255, 160, 120)
 
-            gold_edge = (248, 218, 120) if sum(color) > 300 else (210, 168, 75)
-            self._outline(surface, gold_edge, pts, cut)
-            return
-
-        if self.style == 'dream':
-            # Multi-shade pink gradient with glistening crystalline sparkles matching the pastel pink fantasy sky
-            min_x = min(p[0] for p in pts); max_x = max(p[0] for p in pts)
-            min_y = min(p[1] for p in pts); max_y = max(p[1] for p in pts)
-            bw = max(2, max_x - min_x + 1)
-            bh = max(2, max_y - min_y + 1)
-
-            strength = min(1.3, max(0.5, sum(color) / 540.0))
+        else:  # 'dream' and default
+            # Multi-shade pink gradient with crystalline sparkles matching pastel dream sky
             c_top = tuple(min(255, int(c * strength)) for c in (255, 226, 236))  # Luminous peach-pink crown
             c_mid = tuple(min(255, int(c * strength)) for c in (246, 148, 178))  # Radiant rose blossom
             c_bot = tuple(min(255, int(c * strength)) for c in (210, 98, 140))   # Deep dusk twilight rose
-
-            grad = pygame.Surface((bw, bh), pygame.SRCALPHA)
-            for y in range(bh):
-                t = y / max(1, bh - 1)
-                if t < 0.5:
-                    t2 = t * 2.0
-                    c = tuple(int(a + (b - a) * t2) for a, b in zip(c_top, c_mid))
-                else:
-                    t2 = (t - 0.5) * 2.0
-                    c = tuple(int(a + (b - a) * t2) for a, b in zip(c_mid, c_bot))
-                pygame.draw.line(grad, (*c, 255), (0, y), (bw, y))
-
-            # Embedded glistening stardust glints & diamond sparkles
-            cx = sum(p[0] for p in pts) / len(pts)
-            cy = sum(p[1] for p in pts) / len(pts)
-            seed = int(abs(cx * 73 + cy * 127)) % 10000
-            rng = random.Random(seed)
-
-            # Crystalline diagonal sheen band
-            sheen_y = int(bh * 0.25)
-            pygame.draw.line(grad, (255, 255, 255, 80), (0, sheen_y), (bw, sheen_y + int(bh * 0.18)), 2)
-
-            # 4-point diamond sparkles
-            for _ in range(max(2, min(5, (bw * bh) // 300))):
-                sx = rng.randint(3, max(3, bw - 4))
-                sy = rng.randint(3, max(3, bh - 4))
-                grad.set_at((sx, sy), (255, 255, 255, 255))
-                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                    grad.set_at((sx + dx, sy + dy), (255, 242, 250, 220))
-                for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
-                    if 0 <= sx + dx < bw and 0 <= sy + dy < bh:
-                        grad.set_at((sx + dx, sy + dy), (255, 228, 240, 140))
-
-            # Micro-glitter flecks
-            for _ in range(max(4, min(14, (bw * bh) // 120))):
-                gx = rng.randint(1, max(1, bw - 2))
-                gy = rng.randint(1, max(1, bh - 2))
-                g_col = rng.choice((
-                    (255, 255, 255, 230),
-                    (255, 235, 245, 200),
-                    (255, 218, 235, 190),
-                    (255, 248, 220, 210),
-                ))
-                grad.set_at((gx, gy), g_col)
-
-            # Mask to exact face polygon
-            local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
-            mask = pygame.Surface((bw, bh), pygame.SRCALPHA)
-            pygame.draw.polygon(mask, (255, 255, 255, 255), local_pts)
-            grad.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            surface.blit(grad, (min_x, min_y))
-
-            # Crystalline luminous rose contour
             edge_color = tuple(min(255, int(c * 1.15)) for c in c_top)
-            self._outline(surface, edge_color, pts, cut)
+            sheen_color = (255, 255, 255, 80)
+            sparkle_colors = ((255, 255, 255, 230), (255, 235, 245, 200), (255, 218, 235, 190), (255, 248, 220, 210))
+            seam_dark = (198, 92, 132)
+            seam_light = (255, 230, 242)
 
-            # Center dividing tactile seam for 1x1x2 block
-            if len(pts) == 4:
-                d01 = (pts[1][0] - pts[0][0]) ** 2 + (pts[1][1] - pts[0][1]) ** 2
-                d12 = (pts[2][0] - pts[1][0]) ** 2 + (pts[2][1] - pts[1][1]) ** 2
-                if d01 > d12 * 2.2:
-                    m0 = ((pts[0][0] + pts[1][0]) // 2, (pts[0][1] + pts[1][1]) // 2)
-                    m1 = ((pts[3][0] + pts[2][0]) // 2, (pts[3][1] + pts[2][1]) // 2)
-                    pygame.draw.aaline(surface, (198, 92, 132), m0, m1)
-                    pygame.draw.aaline(surface, (255, 230, 242), (m0[0] + 1, m0[1]), (m1[0] + 1, m1[1]))
-                elif d12 > d01 * 2.2:
-                    m0 = ((pts[1][0] + pts[2][0]) // 2, (pts[1][1] + pts[2][1]) // 2)
-                    m1 = ((pts[0][0] + pts[3][0]) // 2, (pts[0][1] + pts[3][1]) // 2)
-                    pygame.draw.aaline(surface, (198, 92, 132), m0, m1)
-                    pygame.draw.aaline(surface, (255, 230, 242), (m0[0], m0[1] + 1), (m1[0], m1[1] + 1))
-            return
+        # Render 3-stop vertical gradient
+        grad = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        for y in range(bh):
+            t = y / max(1, bh - 1)
+            if t < 0.5:
+                t2 = t * 2.0
+                c = tuple(int(a + (b - a) * t2) for a, b in zip(c_top, c_mid))
+            else:
+                t2 = (t - 0.5) * 2.0
+                c = tuple(int(a + (b - a) * t2) for a, b in zip(c_mid, c_bot))
+            pygame.draw.line(grad, (*c, 255), (0, y), (bw, y))
 
-        pygame.draw.polygon(surface, color, pts)
-        if len(pts) >= 4 and pts[1][1] <= pts[2][1]:
-            sheen = tuple(min(255, c + 42) for c in color)
-            pygame.draw.aaline(surface, sheen, pts[0], pts[1])
+        # Diagonal luster / sheen band
+        sheen_y = int(bh * 0.25)
+        pygame.draw.line(grad, sheen_color, (0, sheen_y), (bw, sheen_y + int(bh * 0.18)), 2)
+
+        # Embedded theme-coherent sparkles & glints
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        seed = int(abs(cx * 73 + cy * 127)) % 10000
+        rng = random.Random(seed)
+
+        # Micro-sparkle flecks
+        for _ in range(max(4, min(14, (bw * bh) // 120))):
+            gx = rng.randint(1, max(1, bw - 2))
+            gy = rng.randint(1, max(1, bh - 2))
+            grad.set_at((gx, gy), rng.choice(sparkle_colors))
+
+        # Diamond accent glints
+        for _ in range(max(1, min(4, (bw * bh) // 320))):
+            sx = rng.randint(3, max(3, bw - 4))
+            sy = rng.randint(3, max(3, bh - 4))
+            grad.set_at((sx, sy), (255, 255, 255, 255))
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                if 0 <= sx + dx < bw and 0 <= sy + dy < bh:
+                    grad.set_at((sx + dx, sy + dy), sparkle_colors[0])
+
+        # Mask exactly to polygon
+        local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
+        mask = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        pygame.draw.polygon(mask, (255, 255, 255, 255), local_pts)
+        grad.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        surface.blit(grad, (min_x, min_y))
+
+        # Smooth contour outline
+        self._outline(surface, edge_color, pts, cut)
 
         # Tactile center dividing seam across elongated faces (1x1x2 block division)
         if len(pts) == 4:
@@ -854,18 +775,13 @@ class IsometricRenderer:
             if d01 > d12 * 2.2:
                 m0 = ((pts[0][0] + pts[1][0]) // 2, (pts[0][1] + pts[1][1]) // 2)
                 m1 = ((pts[3][0] + pts[2][0]) // 2, (pts[3][1] + pts[2][1]) // 2)
-                seam_col = (48, 42, 40) if self.style == 'blueprint' else (88, 70, 24)
-                pygame.draw.aaline(surface, seam_col, m0, m1)
-                pygame.draw.aaline(surface, tuple(min(255, c + 35) for c in color), (m0[0] + 1, m0[1]), (m1[0] + 1, m1[1]))
+                pygame.draw.aaline(surface, seam_dark, m0, m1)
+                pygame.draw.aaline(surface, seam_light, (m0[0] + 1, m0[1]), (m1[0] + 1, m1[1]))
             elif d12 > d01 * 2.2:
                 m0 = ((pts[1][0] + pts[2][0]) // 2, (pts[1][1] + pts[2][1]) // 2)
                 m1 = ((pts[0][0] + pts[3][0]) // 2, (pts[0][1] + pts[3][1]) // 2)
-                seam_col = (48, 42, 40) if self.style == 'blueprint' else (88, 70, 24)
-                pygame.draw.aaline(surface, seam_col, m0, m1)
-                pygame.draw.aaline(surface, tuple(min(255, c + 35) for c in color), (m0[0], m0[1] + 1), (m1[0], m1[1] + 1))
-
-        edge = (48, 92, 120) if self.style == 'blueprint' else color
-        self._outline(surface, edge, pts, cut)
+                pygame.draw.aaline(surface, seam_dark, m0, m1)
+                pygame.draw.aaline(surface, seam_light, (m0[0], m0[1] + 1), (m1[0], m1[1] + 1))
 
     @staticmethod
     def _outline(surface,color,pts,cut=None):
@@ -1137,19 +1053,29 @@ class IsometricRenderer:
             pygame.draw.polygon(surface, (28, 36, 48), [hole[0], hole[1], inner[1], inner[0]])
             pygame.draw.polygon(surface, (18, 24, 34), [hole[0], inner[0], inner[3], hole[3]])
             if self.style == 'forest':
-                pygame.draw.aalines(surface, (250, 231, 212), True, hole)
-                rim = [project(-.4, -.4), project(-.4, .4), project(.4, .4), project(.4, -.4)]
-                pygame.draw.aalines(surface, (180, 156, 91), True, rim)
-                for i in range(4):
-                    a, b = rim[i], rim[(i + 1) % 4]
-                    for t in (.16, .34, .52, .7, .88):
-                        x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-                        pygame.draw.circle(surface, (94, 103, 76), (round(x), round(y)), 1)
+                pygame.draw.aalines(surface, (255, 240, 175), True, hole)
+                rim = [project(-.41, -.41), project(-.41, .41), project(.41, .41), project(.41, -.41)]
+                outer = [project(-.46, -.46), project(-.46, .46), project(.46, .46), project(.46, -.46)]
+                pygame.draw.aalines(surface, (224, 172, 60), True, rim)
+                pygame.draw.aalines(surface, (148, 105, 32), True, outer)
+                for pt in rim:
+                    pygame.draw.circle(surface, (255, 235, 150), (round(pt[0]), round(pt[1])), 2)
+            elif self.style == 'dream':
+                pygame.draw.aalines(surface, (255, 235, 245), True, hole)
+                rim = [project(-.41, -.41), project(-.41, .41), project(.41, .41), project(.41, -.41)]
+                outer = [project(-.46, -.46), project(-.46, .46), project(.46, .46), project(.46, -.46)]
+                pygame.draw.aalines(surface, (250, 170, 198), True, rim)
+                pygame.draw.aalines(surface, (218, 112, 154), True, outer)
+                for pt in rim:
+                    pygame.draw.circle(surface, (255, 255, 255), (round(pt[0]), round(pt[1])), 2)
             else:
-                accent = (248, 172, 72)
-                pygame.draw.aalines(surface, accent, True, hole)
-                outer = [project(-.40, -.40), project(-.40, .40), project(.40, .40), project(.40, -.40)]
-                pygame.draw.aalines(surface, accent, True, outer)
+                pygame.draw.aalines(surface, (255, 215, 170), True, hole)
+                rim = [project(-.41, -.41), project(-.41, .41), project(.41, .41), project(.41, -.41)]
+                outer = [project(-.46, -.46), project(-.46, .46), project(.46, .46), project(.46, -.46)]
+                pygame.draw.aalines(surface, (235, 105, 42), True, rim)
+                pygame.draw.aalines(surface, (72, 160, 215), True, outer)
+                for pt in rim:
+                    pygame.draw.circle(surface, (255, 185, 130), (round(pt[0]), round(pt[1])), 2)
 
         elif kind == 'O':
             # SOFT SWITCH: Raised circular tactile button with illuminated amber core

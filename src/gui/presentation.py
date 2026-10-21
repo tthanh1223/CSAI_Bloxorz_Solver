@@ -29,7 +29,8 @@ def draw(app):
     mouse = pygame.mouse.get_pos()
     hovered = tuple(b.key for b in app.buttons if b.enabled and b.rect.collidepoint(mouse))
     hovered_metrics = tuple(i for i, r in enumerate(getattr(app, 'metric_rects', [])) if r.collidepoint(mouse))
-    animating_ui = bool(hovered) or bool(hovered_metrics) or app.busy or getattr(app, 'active_slider', None) is not None
+    animating_ui = (bool(hovered) or bool(hovered_metrics) or app.busy
+                    or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None)
     time_tick = (pygame.time.get_ticks() // 16) if animating_ui else 0
     slider_state = (getattr(app, 'bgm_volume', 0.35), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
     ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), app.large_text, app.high_contrast,
@@ -60,6 +61,42 @@ def draw(app):
     _draw(app)
     app._presentation_cache = (ui_key, board_key, app.screen.copy())
     return True
+
+
+def draw_confetti(screen, ticks, w, h):
+    """Silky smooth 60 FPS physics celebratory confetti particle explosion."""
+    confetti_colors = (
+        (255, 185, 205),  # Pastel Rose Pink
+        (255, 215, 60),   # Radiant Gold
+        (120, 220, 245),  # Ethereal Cyan
+        (255, 145, 95),   # Coral Peach
+        (165, 235, 170),  # Mint Green
+        (225, 160, 240),  # Lavender Violet
+        (255, 255, 255),  # Pure Sparkle
+    )
+    t = ticks * 0.001
+    for i in range(85):
+        seed = i * 2903 + 57
+        speed = 1.6 + (seed % 28) * 0.10
+        x_base = (seed * 43) % w
+        phase = (seed % 100) / 14.0
+        rot_spd = 2.8 + (seed % 15) * 0.28
+        col = confetti_colors[i % len(confetti_colors)]
+
+        # Falling trajectory
+        y = int((t * speed * 130 + (seed % 900)) % (h + 80)) - 40
+        x = int(x_base + math.sin(t * 2.4 + phase) * 38)
+
+        # 3D tumbling rotation
+        flip = math.cos(t * rot_spd + phase)
+        pw = max(1, int(11 * abs(flip)))
+        ph = 7
+
+        conf_surf = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        conf_surf.fill((*col, 220))
+        if pw > 4:
+            pygame.draw.line(conf_surf, (255, 255, 255, 180), (0, 0), (pw, 0), 1)
+        screen.blit(conf_surf, (x - pw // 2, y - ph // 2))
 
 
 def _draw(app):
@@ -228,11 +265,36 @@ def _draw(app):
     elif app.busy:
         label('Finding a path', x, y, f=heading)
         label({'ASTAR': 'A*'}.get(app.algorithm, app.algorithm), x, y + 36, T.MUTED)
-        center = (x + 12, y + 104)
-        angle = pygame.time.get_ticks() / 350
-        pygame.draw.circle(screen, T.LINE, center, 10, 2)
-        pygame.draw.arc(screen, T.ACCENT, (center[0] - 10, center[1] - 10, 20, 20), angle, angle + 4, 2)
-        label('Exploring possible moves…', x + 32, y + 92, T.MUTED, max_width=pw - 32)
+        ticks = pygame.time.get_ticks()
+        center = (x + 14, y + 104)
+
+        # High-tech Sonar Expanding Ripples
+        for i in range(2):
+            phase = ((ticks * 0.0016 + i * 0.5) % 1.0)
+            r = int(5 + phase * 16)
+            alpha = int(180 * (1.0 - phase))
+            ripple = pygame.Surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(ripple, (*T.ACCENT[:3], alpha), (r + 1, r + 1), r, 1)
+            screen.blit(ripple, (center[0] - r - 1, center[1] - r - 1))
+
+        # Rotating Radar Beam & Core Dot
+        angle = ticks / 280.0
+        sweep_len = 11
+        end_pt = (round(center[0] + math.cos(angle) * sweep_len), round(center[1] + math.sin(angle) * sweep_len))
+        pygame.draw.circle(screen, T.LINE, center, 12, 1)
+        pygame.draw.aaline(screen, T.ACCENT_HOVER, center, end_pt)
+        pygame.draw.circle(screen, T.ACCENT, center, 3)
+
+        # Equalizer Spectrum Bars simulating heuristic exploration
+        for bar_idx in range(5):
+            bx = x + 34 + bar_idx * 5
+            bh = 4 + int(abs(math.sin(ticks * 0.007 + bar_idx * 0.95)) * 10)
+            by = y + 104 - bh // 2
+            pygame.draw.rect(screen, T.ACCENT, (bx, by, 3, bh), border_radius=1)
+
+        # Trailing animated dots
+        dots = '.' * (1 + (ticks // 320) % 3)
+        label(f'Searching state space{dots}', x + 66, y + 94, T.MUTED, max_width=pw - 66)
         button('cancel', 'Cancel search', x, y + 152, pw)
     elif app.result and app.result.found:
         m = app.result.metrics
@@ -298,6 +360,10 @@ def _draw(app):
             for i, (key, title) in enumerate((('BFS', 'BFS'), ('IDS', 'IDS'), ('UCS', 'UCS'), ('ASTAR', 'A*'))):
                 button('algorithm:' + key, title, x + 8, y + 122 + i * 44, pw - 16,
                        kind='quiet', selected=app.algorithm == key)
+
+    # Celebratory win confetti shower
+    if app.win_phase in ('sink', 'disassemble', 'choice'):
+        draw_confetti(screen, pygame.time.get_ticks(), w, h)
 
     # Win choice modal
     if app.win_phase == 'choice' and not (app.stage_picker or app.menu):
