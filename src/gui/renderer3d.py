@@ -402,6 +402,8 @@ class IsometricRenderer:
         self._top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
         self._shadow_surf = None
         self._tile_sprites = []
+        self._landing_bursts = []
+        self._last_landing_id = None
 
     def set_stage(self, stage: StageData) -> None:
         self.stage = stage
@@ -411,6 +413,8 @@ class IsometricRenderer:
         self._frame_key=None
         self.material_cache.clear()
         self._tile_sprites = []
+        self._landing_bursts = []
+        self._last_landing_id = None
 
     def set_view(self, view: str) -> None:
         """Switch camera view (one of VIEWS) and refit the board."""
@@ -1105,70 +1109,108 @@ class IsometricRenderer:
         surface.fill((0,0,0,0) if surface.get_flags()&pygame.SRCALPHA else self.BACKGROUND)
         surface.blit(self._frame,(0,0))
 
-        # Active Cube Holographic 3D Faceted Diamond Beacon in SPLIT mode (live 60 FPS bobbing & rotation)
-        if state.orientation == Orientation.SPLIT and not bool(motion and motion.falling):
-            act_coord = state.pos1 if state.active_cube == 0 else state.pos2
-            ar, ac = act_coord
-            ticks = pygame.time.get_ticks()
-            # Lively vertical bobbing (+- 0.32 tile height)
-            z_mid = 1.70 + sin(ticks * 0.006) * 0.32
-            z_top = z_mid + 0.40
-            z_bot = z_mid - 0.40
+        # Companion Holographic 3D Faceted Diamond Beacon (active throughout entire game)
+        # Hovers above 1x1 standing block, centered over 1x2 lying block, or over active cube in SPLIT mode
+        show_beacon = not bool(motion and (motion.falling or motion.sinking)) and intro_t is None and outro_t is None
+        if show_beacon:
+            ticks = int(motion.progress * 1000) if motion else pygame.time.get_ticks()
+            # Calculate beacon center and base block height
+            if motion and not motion.falling and not motion.sinking:
+                m_list = motion_meshes(motion)
+                if motion.before.orientation == Orientation.SPLIT:
+                    act_idx = min(len(m_list) - 1, max(0, motion.before.active_cube))
+                    b_verts = m_list[act_idx][0]
+                else:
+                    b_verts = [pt for m_verts, _ in m_list for pt in m_verts]
+                ar = sum(pt[0] for pt in b_verts) / len(b_verts)
+                ac = sum(pt[1] for pt in b_verts) / len(b_verts)
+                block_top_z = max(pt[2] for pt in b_verts)
+            else:
+                if state.orientation == Orientation.SPLIT:
+                    act_coord = state.pos1 if state.active_cube == 0 else state.pos2
+                    ar = act_coord[0] + 0.5
+                    ac = act_coord[1] + 0.5
+                    block_top_z = 1.0
+                elif state.orientation == Orientation.STANDING:
+                    ar = state.pos1[0] + 0.5
+                    ac = state.pos1[1] + 0.5
+                    block_top_z = 2.0
+                else:  # HORIZONTAL_R or HORIZONTAL_C: centered between the two tiles
+                    ar = (state.pos1[0] + state.pos2[0]) * 0.5 + 0.5
+                    ac = (state.pos1[1] + state.pos2[1]) * 0.5 + 0.5
+                    block_top_z = 1.0
+
+            # Lively vertical bobbing (+- 0.18 tile height)
+            z_mid = block_top_z + 0.65 + sin(ticks * 0.0055) * 0.18
+            z_top = z_mid + 0.36
+            z_bot = z_mid - 0.36
             rot_ang = ticks * 0.0035
-            r_rad = 0.28
+            r_rad = 0.26
 
-            eq = [self.project((ar + 0.5 + r_rad * cos(rot_ang + k * pi / 2),
-                                ac + 0.5 + r_rad * sin(rot_ang + k * pi / 2), z_mid)) for k in range(4)]
-            top_p = self.project((ar + 0.5, ac + 0.5, z_top))
-            bot_p = self.project((ar + 0.5, ac + 0.5, z_bot))
+            eq = [self.project((ar + r_rad * cos(rot_ang + k * pi / 2),
+                                ac + r_rad * sin(rot_ang + k * pi / 2), z_mid)) for k in range(4)]
+            top_p = self.project((ar, ac, z_top))
+            bot_p = self.project((ar, ac, z_bot))
 
-            # Requested theme colors:
-            # dream city: pink (hồng)
-            # forest ruin: yellow (vàng)
-            # paper/blueprint: red (đỏ)
+            # Theme palettes:
+            # Dream City: Pink (Hồng)
+            # Forest Ruins: Yellow (Vàng hổ phách)
+            # Blueprint Studio: Red (Đỏ)
             if self.style == 'dream':
-                c_light = (255, 215, 235, 240)
-                c_mid = (255, 120, 180, 220)
-                c_dark = (215, 60, 135, 200)
-                ring_col = (255, 180, 215)
-                floor_ring_col = (255, 160, 205)
+                c_light = (255, 225, 242, 245)
+                c_mid = (255, 125, 185, 230)
+                c_dark = (215, 60, 135, 210)
+                ring_col = (255, 180, 220)
+                aura_col = (255, 140, 195, 55)
             elif self.style == 'forest':
-                c_light = (255, 252, 175, 240)
-                c_mid = (255, 215, 25, 220)
-                c_dark = (205, 150, 10, 200)
+                c_light = (255, 252, 185, 245)
+                c_mid = (255, 215, 30, 230)
+                c_dark = (205, 150, 10, 210)
                 ring_col = (255, 235, 90)
-                floor_ring_col = (255, 220, 60)
+                aura_col = (255, 215, 45, 55)
             else:  # 'blueprint' / paper
-                c_light = (255, 170, 170, 240)
-                c_mid = (245, 55, 55, 220)
-                c_dark = (185, 20, 20, 200)
+                c_light = (255, 180, 180, 245)
+                c_mid = (245, 55, 55, 230)
+                c_dark = (185, 20, 20, 210)
                 ring_col = (255, 110, 110)
-                floor_ring_col = (255, 75, 75)
+                aura_col = (255, 60, 60, 55)
 
             gem_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+
+            # Soft focal halo on the top surface of the block
+            halo_p = [self.project((ar + 0.30 * cos(i * pi / 6),
+                                    ac + 0.30 * sin(i * pi / 6),
+                                    block_top_z + 0.01)) for i in range(12)]
+            pygame.draw.polygon(gem_surf, aura_col, halo_p)
+            pygame.draw.aalines(gem_surf, ring_col, True, halo_p)
+
+            # Tether beam connecting diamond bottom to block top
+            tether_bot = self.project((ar, ac, block_top_z + 0.02))
+            pygame.draw.aaline(gem_surf, (*ring_col, 160), bot_p, tether_bot)
+
+            # Upper 4 facets
             pygame.draw.polygon(gem_surf, c_light, [top_p, eq[0], eq[1]])
             pygame.draw.polygon(gem_surf, c_mid, [top_p, eq[1], eq[2]])
             pygame.draw.polygon(gem_surf, c_dark, [top_p, eq[2], eq[3]])
             pygame.draw.polygon(gem_surf, c_mid, [top_p, eq[3], eq[0]])
 
+            # Lower 4 facets
             pygame.draw.polygon(gem_surf, c_mid, [bot_p, eq[1], eq[0]])
             pygame.draw.polygon(gem_surf, c_dark, [bot_p, eq[2], eq[1]])
             pygame.draw.polygon(gem_surf, c_dark, [bot_p, eq[3], eq[2]])
             pygame.draw.polygon(gem_surf, c_mid, [bot_p, eq[0], eq[3]])
 
+            # White crystalline facets edges
             for k in range(4):
                 pygame.draw.aaline(gem_surf, (255, 255, 255), top_p, eq[k])
                 pygame.draw.aaline(gem_surf, (255, 255, 255), bot_p, eq[k])
                 pygame.draw.aaline(gem_surf, (255, 255, 255), eq[k], eq[(k + 1) % 4])
 
-            ring_pts = [self.project((ar + 0.5 + 0.38 * cos(rot_ang * 1.6 + i * pi / 8),
-                                      ac + 0.5 + 0.38 * sin(rot_ang * 1.6 + i * pi / 8),
-                                      z_mid + 0.08 * sin(i * pi / 4))) for i in range(16)]
+            # Celestial particle ring around diamond waist
+            ring_pts = [self.project((ar + 0.36 * cos(rot_ang * 1.6 + i * pi / 8),
+                                      ac + 0.36 * sin(rot_ang * 1.6 + i * pi / 8),
+                                      z_mid + 0.06 * sin(i * pi / 4))) for i in range(16)]
             pygame.draw.aalines(gem_surf, ring_col, True, ring_pts)
-
-            floor_ring = [self.project((ar + 0.5 + 0.44 * cos(i * pi / 8),
-                                        ac + 0.5 + 0.44 * sin(i * pi / 8), 0.02)) for i in range(16)]
-            pygame.draw.aalines(gem_surf, floor_ring_col, True, floor_ring)
 
             surface.blit(gem_surf, (0, 0))
 
@@ -1187,29 +1229,85 @@ class IsometricRenderer:
                 pygame.draw.ellipse(wave_surf, wave_color, wave_rect, max(1, int(3 * (1.0 - p) * self.zoom)))
                 surface.blit(wave_surf, (center[0] - rx - 2, center[1] - ry - 2))
 
-        # Ground impact landing dust puffs / sparkles
-        if motion and not motion.falling and not motion.sinking and motion.progress > 0.82:
-            ip = (motion.progress - 0.82) / 0.18
-            i_alpha = max(0, int(190 * (1.0 - ip)))
-            if i_alpha > 0:
-                dust_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+        # Ground impact landing dust puffs (persistent 520ms burst with billowing clouds & sparks)
+        now_ticks = pygame.time.get_ticks()
+        if motion and not motion.falling and not motion.sinking and motion.progress >= 0.76:
+            m_id = id(motion)
+            if getattr(self, '_last_landing_id', None) != m_id:
+                self._last_landing_id = m_id
                 landing_cells = [motion.after.pos1]
                 if motion.after.orientation != Orientation.STANDING:
                     landing_cells.append(motion.after.pos2)
-                for lr, lc in landing_cells:
-                    for dr, dc in ((0.05, 0.05), (0.05, 0.95), (0.95, 0.95), (0.95, 0.05)):
-                        puff_r = lr + dr + (dr - 0.5) * 0.35 * ip
-                        puff_c = lc + dc + (dc - 0.5) * 0.35 * ip
-                        pt = self.project((puff_r, puff_c, 0.02))
-                        p_rad = max(1, int((2.0 + ip * 1.5) * self.zoom))
-                        if self.style == 'dream':
-                            p_col = (255, 215, 235, i_alpha)
-                        elif self.style == 'forest':
-                            p_col = (235, 220, 140, i_alpha)
-                        else:
-                            p_col = (140, 240, 255, i_alpha)
-                        pygame.draw.circle(dust_surf, p_col, (round(pt[0]), round(pt[1])), p_rad)
-                surface.blit(dust_surf, (0, 0))
+                self._landing_bursts.append({
+                    'start_time': now_ticks,
+                    'cells': landing_cells,
+                    'style': self.style,
+                })
+
+        # Render active ground impact dust bursts (lasts 520ms for rich, clear visibility)
+        self._landing_bursts = [b for b in self._landing_bursts if now_ticks - b['start_time'] < 520]
+        if self._landing_bursts:
+            dust_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+            for burst in self._landing_bursts:
+                dt = (now_ticks - burst['start_time']) / 520.0
+                expand = 1.0 - (1.0 - dt) ** 2
+                alpha = max(0, int(245 * ((1.0 - dt) ** 1.3)))
+                if alpha <= 0:
+                    continue
+
+                b_style = burst.get('style', self.style)
+                if b_style == 'dream':
+                    col_outer = (255, 185, 220)
+                    col_core = (255, 245, 250)
+                    col_spark = (255, 255, 255)
+                elif b_style == 'forest':
+                    col_outer = (235, 210, 105)
+                    col_core = (255, 248, 185)
+                    col_spark = (255, 252, 210)
+                else:  # blueprint
+                    col_outer = (70, 220, 255)
+                    col_core = (215, 255, 255)
+                    col_spark = (245, 255, 255)
+
+                for lr, lc in burst['cells']:
+                    # Subtle expanding ground shockwave ring
+                    rx = int((16.0 + 38.0 * expand) * self.zoom)
+                    ry = int(rx * 0.50)
+                    if rx > 2 and ry > 2:
+                        center_pt = self.project((lr + 0.5, lc + 0.5, 0.01))
+                        ring_alpha = int(alpha * 0.42)
+                        if ring_alpha > 0:
+                            w_surf = pygame.Surface((rx * 2 + 4, ry * 2 + 4), pygame.SRCALPHA)
+                            pygame.draw.ellipse(w_surf, (*col_outer, ring_alpha), (2, 2, rx * 2, ry * 2), max(1, int(2 * self.zoom)))
+                            dust_surf.blit(w_surf, (center_pt[0] - rx - 2, center_pt[1] - ry - 2))
+
+                    # 14 billowing micro-dust cloud puffs per landing cell
+                    for i in range(14):
+                        seed_ang = i * (2.0 * pi / 14.0) + (lr * 19 + lc * 37) * 0.12
+                        dist = 0.42 + expand * 0.62
+                        puff_r = lr + 0.5 + cos(seed_ang) * dist
+                        puff_c = lc + 0.5 + sin(seed_ang) * dist
+                        puff_z = 0.02 + sin(pi * dt) * 0.26
+                        pt = self.project((puff_r, puff_c, puff_z))
+
+                        p_rad = max(2, int((3.8 + 4.5 * expand) * self.zoom))
+                        # Outer soft cloud puff
+                        pygame.draw.circle(dust_surf, (*col_outer, int(alpha * 0.72)), (round(pt[0]), round(pt[1])), p_rad)
+                        # Inner bright core puff
+                        c_rad = max(1, int(p_rad * 0.52))
+                        pygame.draw.circle(dust_surf, (*col_core, alpha), (round(pt[0]), round(pt[1])), c_rad)
+
+                    # 4 upward sparkling micro-flecks shooting upward
+                    for si in range(4):
+                        s_ang = si * (pi / 2.0) + (lr + lc)
+                        s_r = lr + 0.5 + cos(s_ang) * (0.25 + expand * 0.35)
+                        s_c = lc + 0.5 + sin(s_ang) * (0.25 + expand * 0.35)
+                        s_z = 0.05 + dt * 0.65
+                        s_pt = self.project((s_r, s_c, s_z))
+                        s_alpha = max(0, int(alpha * (1.0 - dt * 0.5)))
+                        pygame.draw.circle(dust_surf, (*col_spark, s_alpha), (round(s_pt[0]), round(s_pt[1])), max(1, int(2 * self.zoom)))
+
+            surface.blit(dust_surf, (0, 0))
 
         # Quantum teleport tracer stream when splitting
         if motion and not motion.falling and not motion.sinking:
@@ -1247,7 +1345,7 @@ class IsometricRenderer:
                 arc_alpha = max(0, int(230 * sin(pi * mp)))
                 c1_pt = self.project((motion.after.pos1[0] + 0.5, motion.after.pos1[1] + 0.5, 0.5))
                 c2_pt = self.project((motion.after.pos2[0] + 0.5, motion.after.pos2[1] + 0.5, 0.5))
-                ticks = pygame.time.get_ticks()
+                ticks = int(motion.progress * 1000) if motion else pygame.time.get_ticks()
                 for arc_i in range(2):
                     arc_pts = [c1_pt]
                     for seg in range(1, 4):
@@ -1260,49 +1358,113 @@ class IsometricRenderer:
                     pygame.draw.lines(arc_surf, arc_col, False, arc_pts, 2)
                 surface.blit(arc_surf, (0, 0))
 
-        # Celestial ascension beam when sinking into the goal hole
+        # Celestial ascension beam when sinking into the goal hole (multi-layer volumetric pillar + runic portal)
         if motion and motion.sinking:
             gr, gc = self.stage.goal
             sp = max(0.0, min(1.0, motion.progress))
-            beam_alpha = min(220, int(255 * sin(pi * sp * 0.88)))
+            beam_alpha = min(250, int(255 * sin(pi * sp * 0.90)))
             if beam_alpha > 0:
                 beam_surf = pygame.Surface(self.size, pygame.SRCALPHA)
-                b_center = self.project((gr + 0.5, gc + 0.5, 0.0))
-                b_top = self.project((gr + 0.5, gc + 0.5, 4.2))
+                ticks = int(motion.progress * 1000) if motion else pygame.time.get_ticks()
 
-                rx = int((24.0 + sin(sp * pi) * 7.0) * self.zoom)
-                top_rx = int(rx * 1.35)
-
-                p_base_l = (b_center[0] - rx, b_center[1])
-                p_base_r = (b_center[0] + rx, b_center[1])
-                p_top_r = (b_top[0] + top_rx, b_top[1])
-                p_top_l = (b_top[0] - top_rx, b_top[1])
-
+                # Theme-specific color palettes
                 if self.style == 'dream':
-                    beam_glow = (255, 185, 220, beam_alpha // 2)
-                    beam_core = (255, 245, 250, beam_alpha)
-                    speck_col = (255, 255, 255)
+                    col_outer_halo = (195, 115, 255)  # Ethereal lavender starlight
+                    col_sheath = (255, 130, 210)      # Sakura neon magenta
+                    col_core = (255, 250, 255)        # Pure diamond crystal white
+                    col_helix = (255, 195, 240)       # Pearlescent ribbon
+                    col_portal = (255, 140, 220)      # Floor portal ring
+                    specks = [(255, 255, 255), (255, 210, 245), (225, 180, 255)]
                 elif self.style == 'forest':
-                    beam_glow = (255, 225, 90, beam_alpha // 2)
-                    beam_core = (255, 252, 210, beam_alpha)
-                    speck_col = (255, 245, 180)
+                    col_outer_halo = (145, 215, 60)   # Sacred emerald sun mist
+                    col_sheath = (255, 195, 30)       # Ancient golden amber
+                    col_core = (255, 255, 225)        # Solar flare radiant white
+                    col_helix = (255, 230, 95)        # Sunbeam ribbon
+                    col_portal = (255, 210, 45)       # Sacred solar disc ring
+                    specks = [(255, 255, 220), (255, 245, 160), (210, 255, 140)]
                 else:  # blueprint
-                    beam_glow = (40, 215, 255, beam_alpha // 2)
-                    beam_core = (210, 255, 255, beam_alpha)
-                    speck_col = (180, 250, 255)
+                    col_outer_halo = (25, 95, 245)    # Holographic deep cobalt
+                    col_sheath = (0, 220, 255)        # Quantum laser cyan
+                    col_core = (235, 255, 255)        # Pure matrix beam white
+                    col_helix = (120, 245, 255)       # Cybernetic flux ribbon
+                    col_portal = (0, 210, 255)        # Floor coordinate grid ring
+                    specks = [(180, 250, 255), (235, 255, 255), (100, 215, 255)]
 
-                pygame.draw.polygon(beam_surf, beam_glow, [p_base_l, p_base_r, p_top_r, p_top_l])
-                pygame.draw.line(beam_surf, beam_core, b_center, b_top, max(2, int(4 * self.zoom)))
+                # 1. Ground Portal Aperture & Sacred Mandala Rings
+                r_ground = 0.62 + sin(ticks * 0.007) * 0.05
+                floor_ring = [self.project((gr + 0.5 + r_ground * cos(k * pi / 8),
+                                            gc + 0.5 + r_ground * sin(k * pi / 8), 0.01)) for k in range(16)]
+                pygame.draw.polygon(beam_surf, (*col_sheath, int(beam_alpha * 0.35)), floor_ring)
+                pygame.draw.aalines(beam_surf, (*col_core, int(beam_alpha * 0.85)), True, floor_ring)
 
-                ticks = pygame.time.get_ticks()
-                for si in range(8):
-                    seed = si * 47 + 19
-                    drift = ((ticks * 0.003 + seed) % 1.0)
-                    sz = drift * 4.2
-                    s_pt = self.project((gr + 0.5 + sin(seed + ticks * 0.004) * 0.28,
-                                         gc + 0.5 + cos(seed + ticks * 0.004) * 0.28, sz))
-                    s_a = max(0, int(230 * sin(pi * drift)))
-                    pygame.draw.circle(beam_surf, (*speck_col, s_a), (round(s_pt[0]), round(s_pt[1])), 2)
+                # Inner rotating runic ring
+                rune_ring = [self.project((gr + 0.5 + 0.42 * cos(ticks * 0.003 + k * pi / 6),
+                                           gc + 0.5 + 0.42 * sin(ticks * 0.003 + k * pi / 6), 0.02)) for k in range(12)]
+                pygame.draw.aalines(beam_surf, (*col_portal, int(beam_alpha * 0.90)), True, rune_ring)
+
+                # 4 Cardinal flare rays on the floor
+                for k in range(4):
+                    ang = k * (pi / 2.0) + ticks * 0.002
+                    p_start = self.project((gr + 0.5, gc + 0.5, 0.02))
+                    p_end = self.project((gr + 0.5 + cos(ang) * 0.85, gc + 0.5 + sin(ang) * 0.85, 0.02))
+                    pygame.draw.aaline(beam_surf, (*col_core, int(beam_alpha * 0.75)), p_start, p_end)
+
+                # 2. Multi-Layer Volumetric Sheath (4 concentric cylindrical envelopes)
+                sheath_configs = [
+                    (0.58, col_outer_halo, 0.24),  # Outer atmosphere
+                    (0.40, col_sheath, 0.48),      # Secondary aura
+                    (0.25, col_sheath, 0.80),      # Luminous sheath
+                    (0.12, col_core, 0.98),        # Hyper-dense core
+                ]
+
+                z_slices = [0.0, 0.7, 1.5, 2.4, 3.3, 4.2, 5.0]
+                for rad_base, s_color, a_mult in sheath_configs:
+                    layer_alpha = max(0, min(255, int(beam_alpha * a_mult)))
+                    if layer_alpha <= 0:
+                        continue
+                    left_pts = []
+                    right_pts = []
+                    for z_val in z_slices:
+                        rad_z = rad_base * (1.0 + z_val * 0.08)
+                        p_l = self.project((gr + 0.5 - rad_z * 0.707, gc + 0.5 + rad_z * 0.707, z_val))
+                        p_r = self.project((gr + 0.5 + rad_z * 0.707, gc + 0.5 - rad_z * 0.707, z_val))
+                        left_pts.append(p_l)
+                        right_pts.append(p_r)
+                    sheath_poly = left_pts + list(reversed(right_pts))
+                    pygame.draw.polygon(beam_surf, (*s_color, layer_alpha), sheath_poly)
+
+                # 3. Dual Swirling Helix Energy Ribbons (Ascending vortex)
+                for h_idx in range(2):
+                    h_offset = h_idx * pi
+                    h_pts = []
+                    for step in range(21):
+                        hz = (step / 20.0) * 4.6
+                        h_ang = hz * 3.0 - ticks * 0.0075 + h_offset
+                        hr = 0.28 + hz * 0.04
+                        hp_r = gr + 0.5 + cos(h_ang) * hr
+                        hp_c = gc + 0.5 + sin(h_ang) * hr
+                        h_pt = self.project((hp_r, hp_c, hz))
+                        h_pts.append(h_pt)
+                    h_alpha = max(0, int(beam_alpha * 0.85))
+                    pygame.draw.lines(beam_surf, (*col_helix, h_alpha // 2), False, h_pts, max(2, int(3 * self.zoom)))
+                    pygame.draw.aalines(beam_surf, (*col_core, h_alpha), False, h_pts)
+
+                # 4. 16 Celestial Ascending Stardust Particles & Fireflies
+                for si in range(16):
+                    drift_speed = 0.0020 * (1.0 + (si % 4) * 0.25)
+                    drift = ((ticks * drift_speed + si * 0.0625) % 1.0)
+                    sz = drift * 4.8
+                    s_ang = si * 1.57 + ticks * 0.004
+                    s_rad = 0.12 + 0.24 * sin(si * 2.7 + ticks * 0.003)
+                    s_pt = self.project((gr + 0.5 + cos(s_ang) * s_rad,
+                                         gc + 0.5 + sin(s_ang) * s_rad, sz))
+                    s_a = max(0, int(beam_alpha * sin(pi * drift)))
+                    col = specks[si % len(specks)]
+                    p_size = 2 if si % 3 != 0 else 3
+                    pygame.draw.circle(beam_surf, (*col, s_a), (round(s_pt[0]), round(s_pt[1])), p_size)
+                    if si % 5 == 0 and s_a > 100:
+                        pygame.draw.line(beam_surf, (255, 255, 255, s_a), (s_pt[0] - 3, s_pt[1]), (s_pt[0] + 3, s_pt[1]))
+                        pygame.draw.line(beam_surf, (255, 255, 255, s_a), (s_pt[0], s_pt[1] - 3), (s_pt[0], s_pt[1] + 3))
 
                 surface.blit(beam_surf, (0, 0))
         self.stats['material_cache_bytes']=sum(s.get_pitch()*s.get_height() for s in self.material_cache.values())
