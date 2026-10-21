@@ -199,7 +199,10 @@ class BloxorzApp:
         self.actions.append(action)
         self.session.moves = sum(a != Action.SPACE for a in self.actions)
         if self.animate:
-            self.animation.duration_sec = 0.18 / self.speed
+            if self.session.current_state.bridges_status != before.bridges_status:
+                self.animation.duration_sec = 0.32 / self.speed
+            else:
+                self.animation.duration_sec = 0.18 / self.speed
             self.animation.start(before, self.session.current_state, action)
         self.result = self.result if replay else None
         if not replay:

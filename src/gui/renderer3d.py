@@ -402,6 +402,7 @@ class IsometricRenderer:
         self._top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
         self._shadow_surf = None
         self._tile_sprites = []
+        self._bridge_tile_sprites = {}
         self._landing_bursts = []
         self._last_landing_id = None
 
@@ -413,6 +414,8 @@ class IsometricRenderer:
         self._frame_key=None
         self.material_cache.clear()
         self._tile_sprites = []
+        if hasattr(self, '_bridge_tile_sprites'):
+            self._bridge_tile_sprites.clear()
         self._landing_bursts = []
         self._last_landing_id = None
 
@@ -425,6 +428,8 @@ class IsometricRenderer:
 
     def resize(self, size: tuple[int, int]) -> None:
         self.size = size
+        if hasattr(self, '_bridge_tile_sprites'):
+            self._bridge_tile_sprites.clear()
         if self.stage is None:
             return
         cells = [(r, c) for r, row in enumerate(self.stage.grid) for c, tile in enumerate(row)
@@ -502,7 +507,7 @@ class IsometricRenderer:
             result.append((depth, projected, shaded, outline))
         return result
 
-    def _build_static(self, shown, broken=None):
+    def _build_static(self, shown, broken=None, changing_bridges=()):
         """Bake only on stage / bridge / camera / contrast changes.
 
         broken: a fragile tile that has just broken; it is left out of the board,
@@ -517,7 +522,7 @@ class IsometricRenderer:
                 coord = (r, c)
                 bridge = self.bridge_cells.get(coord)
                 if bridge is not None:
-                    if bridge < len(shown.bridges_status) and shown.bridges_status[bridge]:
+                    if bridge not in changing_bridges and bridge < len(shown.bridges_status) and shown.bridges_status[bridge]:
                         active_cells.append(coord)
                 elif tile != TileType.VOID and coord != broken:
                     active_cells.append(coord)
@@ -576,14 +581,26 @@ class IsometricRenderer:
             for c,tile in enumerate(row):
                 coord=(r,c);bridge=self.bridge_cells.get(coord)
                 if bridge is not None:
-                    if bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
+                    if bridge in changing_bridges or bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
                         pts=[self.project(p) for p in cuboid(r,c,-.12,1,1,0)[:4]]
                         commands.append((self.camera.depth(r+.5,c+.5,0),'outline',pts));continue
+                    # Open resting bridge tile: styled identically to the player block cuboid
+                    top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
+                    tile_outlines.append(top)
+                    pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
+                    vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.32,.976,.976,.32),.02)
+                    for depth,pts,ink,edge in self._faces(vertices,self.BLOCK,faces=indices,player=True):
+                        commands.append((depth,'bridge_face',(pts,ink,edge)))
+                    label='goal' if coord==self.stage.goal else ''
+                    if coord in self.stage.switches:
+                        label={'SOFT':'O','HEAVY':'X','SPLIT':'<>'}[self.stage.switches[coord].type.value]
+                    if label:commands.append((self.camera.depth(r+.5,c+.5,0)+.001,'marker',((r+.5,c+.5,.01),label)))
+                    continue
                 elif tile==TileType.VOID or coord==broken:continue
                 top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
                 tile_outlines.append(top)
                 pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
-                color=(112,145,151) if bridge is not None else ((178,200,193) if self.high_contrast else self.FLOOR)
+                color=(178,200,193) if self.high_contrast else self.FLOOR
                 if tile==TileType.FRAGILE:color=self.FRAGILE
                 vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.32,.976,.976,.32),.02)
                 for depth,pts,ink,edge in self._faces(vertices,color,faces=indices):
@@ -600,6 +617,9 @@ class IsometricRenderer:
                 pts,ink=payload
                 if len(pts)==4:self._material(self._base,pts,ink)
                 else:pygame.draw.polygon(self._base,ink,pts)
+            elif kind=='bridge_face':
+                pts,ink,edge=payload
+                self._block_face(self._base,pts,ink,edge)
             elif kind=='marker':self._marker(self._base,*payload)
             else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
         seam = {'dream': (202, 178, 184), 'blueprint': (48, 112, 140), 'forest': (102, 112, 80)}.get(self.style, (168, 174, 163))
@@ -621,15 +641,19 @@ class IsometricRenderer:
                 coord = (r, c)
                 bridge = self.bridge_cells.get(coord)
                 if bridge is not None:
-                    if bridge >= len(shown.bridges_status) or not shown.bridges_status[bridge]:
+                    if bridge in changing_bridges or bridge >= len(shown.bridges_status) or not shown.bridges_status[bridge]:
                         continue
+                    color = self.BLOCK
+                    vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
+                    t_faces = self._faces(vertices, color, faces=indices, player=True)
                 elif tile == TileType.VOID or coord == broken:
                     continue
-                color = (112, 145, 151) if bridge is not None else ((178, 200, 193) if self.high_contrast else self.FLOOR)
-                if tile == TileType.FRAGILE:
-                    color = self.FRAGILE
-                vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
-                t_faces = self._faces(vertices, color, faces=indices)
+                else:
+                    color = (178, 200, 193) if self.high_contrast else self.FLOOR
+                    if tile == TileType.FRAGILE:
+                        color = self.FRAGILE
+                    vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
+                    t_faces = self._faces(vertices, color, faces=indices)
                 top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
                 all_pts = [p for _, pts, _, _ in t_faces for p in pts] + top
                 min_x = floor(min(p[0] for p in all_pts)) - 2
@@ -639,12 +663,17 @@ class IsometricRenderer:
                 spr_w = max(4, max_x - min_x + 1)
                 spr_h = max(4, max_y - min_y + 1)
                 tile_surf = pygame.Surface((spr_w, spr_h), pygame.SRCALPHA)
-                for depth, pts, ink, edge in sorted(t_faces, key=lambda it: it[0]):
-                    local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
-                    if len(local_pts) == 4:
-                        self._material(tile_surf, local_pts, ink)
-                    else:
-                        pygame.draw.polygon(tile_surf, ink, local_pts)
+                if bridge is not None:
+                    for depth, pts, ink, edge in sorted(t_faces, key=lambda it: it[0]):
+                        local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
+                        self._block_face(tile_surf, local_pts, ink, edge)
+                else:
+                    for depth, pts, ink, edge in sorted(t_faces, key=lambda it: it[0]):
+                        local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
+                        if len(local_pts) == 4:
+                            self._material(tile_surf, local_pts, ink)
+                        else:
+                            pygame.draw.polygon(tile_surf, ink, local_pts)
                 local_top = [(p[0] - min_x, p[1] - min_y) for p in top]
                 pygame.draw.aalines(tile_surf, (*seam, 165), True, local_top)
                 label = 'goal' if coord == self.stage.goal else '!' if tile == TileType.FRAGILE else ''
@@ -853,6 +882,148 @@ class IsometricRenderer:
         box=pygame.Rect(min(xs),min(ys),max(xs)-min(xs)+1,max(ys)-min(ys)+1)
         return max(ys)>min(ys) and box.colliderect(surface.get_clip())
 
+    def _get_bridge_sprite(self, coord):
+        if not hasattr(self, '_bridge_tile_sprites'):
+            self._bridge_tile_sprites = {}
+        if coord in self._bridge_tile_sprites:
+            return self._bridge_tile_sprites[coord]
+        r, c = coord
+        vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
+        faces = self._faces(vertices, self.BLOCK, faces=indices, player=True)
+        all_pts = [p for _, pts, _, _ in faces for p in pts]
+        min_x = floor(min(p[0] for p in all_pts)) - 4
+        max_x = ceil(max(p[0] for p in all_pts)) + 4
+        min_y = floor(min(p[1] for p in all_pts)) - 4
+        max_y = ceil(max(p[1] for p in all_pts)) + 4
+        bw = max(4, max_x - min_x + 1)
+        bh = max(4, max_y - min_y + 1)
+        spr = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        for _, pts, color, cut in sorted(faces, key=lambda it: it[0]):
+            local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
+            self._block_face(spr, local_pts, color, cut)
+        self._bridge_tile_sprites[coord] = (spr, (min_x, min_y))
+        return self._bridge_tile_sprites[coord]
+
+    def _render_bridge_shatter(self, surface, coord, p):
+        """Render 12 3D tumbling debris shards falling past bottom frame, dense dust cloud, and collapse wave."""
+        br, bc = coord
+        p = max(0.0, min(1.0, p))
+
+        # 1. Collapse shockwave at floor plane z = 0.01
+        if p <= 0.45:
+            p_w = p / 0.45
+            c_pt = self.project((br + 0.5, bc + 0.5, 0.01))
+            rx = int((14.0 + p_w * 54.0) * self.zoom)
+            ry = int(rx * 0.48)
+            alpha = int(210 * (1.0 - p_w))
+            if rx > 2 and ry > 2 and alpha > 0:
+                wave_surf = pygame.Surface((rx * 2 + 4, ry * 2 + 4), pygame.SRCALPHA)
+                w_col = {'dream': (255, 185, 215, alpha), 'forest': (255, 215, 60, alpha), 'blueprint': (80, 225, 255, alpha)}.get(self.style, (255, 255, 255, alpha))
+                pygame.draw.ellipse(wave_surf, w_col, (2, 2, rx * 2, ry * 2), max(1, int(2.5 * (1.0 - p_w) * self.zoom)))
+                surface.blit(wave_surf, (c_pt[0] - rx - 2, c_pt[1] - ry - 2))
+
+        # 2. 12 3D Tumbling Debris Shards falling all the way down past the bottom screen
+        sh_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+        shard_alpha = 255 if p < 0.65 else max(0, int(255 * (1.0 - (p - 0.65) / 0.35)))
+
+        # Theme colors for shards matching the player block cuboid
+        if self.style == 'forest':
+            c_top = (255, 240, 172, shard_alpha)
+            c_side = (148, 102, 28, shard_alpha)
+            edge_col = (255, 250, 200, shard_alpha)
+            dust_main = (235, 205, 140)
+            dust_sparkle = (255, 245, 190)
+        elif self.style == 'blueprint':
+            c_top = (255, 172, 115, shard_alpha)
+            c_side = (148, 48, 20, shard_alpha)
+            edge_col = (255, 210, 175, shard_alpha)
+            dust_main = (160, 220, 245)
+            dust_sparkle = (220, 245, 255)
+        else:  # dream
+            c_top = (255, 226, 236, shard_alpha)
+            c_side = (210, 98, 140, shard_alpha)
+            edge_col = (255, 255, 255, shard_alpha)
+            dust_main = (255, 210, 230)
+            dust_sparkle = (255, 245, 250)
+
+        perim = [
+            (br + 0.05, bc + 0.05), (br + 0.05, bc + 0.50), (br + 0.05, bc + 0.95),
+            (br + 0.50, bc + 0.95), (br + 0.95, bc + 0.95), (br + 0.95, bc + 0.50),
+            (br + 0.95, bc + 0.05), (br + 0.50, bc + 0.05)
+        ]
+        center = (br + 0.50, bc + 0.50)
+        dz = -0.6 * p - 13.5 * (p ** 1.85)  # Plummets all the way past the bottom frame!
+
+        shard_commands = []
+        for k in range(8):
+            pa = perim[k]
+            pb = perim[(k + 1) % 8]
+            ang = k * pi / 4.0 + pi / 8.0
+            dr = cos(ang) * 0.62 * p
+            dc = sin(ang) * 0.62 * p
+            rot_tumble = p * 4.2 * (1.0 if k % 2 == 0 else -1.0)
+
+            s_mid_r = (center[0] + pa[0] + pb[0]) / 3.0 + dr
+            s_mid_c = (center[1] + pa[1] + pb[1]) / 3.0 + dc
+
+            pts_local = []
+            for pr, pc in (center, pa, pb):
+                dpr = (pr - center[0]) * 0.88
+                dpc = (pc - center[1]) * 0.88
+                r_rot = dpr * cos(rot_tumble) - dpc * sin(rot_tumble)
+                c_rot = dpr * sin(rot_tumble) + dpc * cos(rot_tumble)
+                pts_local.append((s_mid_r + r_rot, s_mid_c + c_rot))
+
+            top_shard = [self.project((pr, pc, dz)) for pr, pc in pts_local]
+            bot_shard = [self.project((pr, pc, dz - 0.16)) for pr, pc in pts_local]
+            depth = self.camera.depth(s_mid_r, s_mid_c, dz)
+            shard_commands.append((depth, top_shard, bot_shard))
+
+        # 4 center core diamond shards
+        for k in range(4):
+            ang = k * pi / 2.0
+            dr = cos(ang) * 0.35 * p
+            dc = sin(ang) * 0.35 * p
+            rot_tumble = p * 5.0 * (-1.0 if k % 2 == 0 else 1.0)
+            c_mid_r = center[0] + dr
+            c_mid_c = center[1] + dc
+            diamond_pts = [
+                (0.0, 0.14), (0.14, 0.0), (0.0, -0.14), (-0.14, 0.0)
+            ]
+            pts_local = []
+            for dpr, dpc in diamond_pts:
+                r_rot = dpr * cos(rot_tumble) - dpc * sin(rot_tumble)
+                c_rot = dpr * sin(rot_tumble) + dpc * cos(rot_tumble)
+                pts_local.append((c_mid_r + r_rot, c_mid_c + c_rot))
+            top_shard = [self.project((pr, pc, dz)) for pr, pc in pts_local]
+            bot_shard = [self.project((pr, pc, dz - 0.16)) for pr, pc in pts_local]
+            depth = self.camera.depth(c_mid_r, c_mid_c, dz)
+            shard_commands.append((depth, top_shard, bot_shard))
+
+        for _, top_shard, bot_shard in sorted(shard_commands, key=lambda it: it[0]):
+            pygame.draw.polygon(sh_surf, c_side, [top_shard[1], top_shard[2], bot_shard[2], bot_shard[1]])
+            pygame.draw.polygon(sh_surf, c_top, top_shard)
+            pygame.draw.aalines(sh_surf, edge_col, True, top_shard)
+
+        # 3. Dense Billowing Dust Storm (36 volumetric particles)
+        for i in range(36):
+            seed = int(br * 43 + bc * 89 + i * 23)
+            ang = ((seed % 360) * pi / 180.0)
+            spd = 0.25 + (seed % 10) * 0.055
+            dust_r = br + 0.5 + cos(ang) * spd * (p ** 0.60)
+            dust_c = bc + 0.5 + sin(ang) * spd * (p ** 0.60)
+            dust_z = 0.25 * sin(pi * p) - 0.75 * p - (seed % 5) * 0.04
+            pt = self.project((dust_r, dust_c, dust_z))
+            dust_a = max(0, int(220 * sin(pi * max(0.01, min(0.99, p))) * (1.0 - p * 0.45)))
+            if dust_a > 0:
+                rad = max(2, int((3 + (seed % 6) + p * 8) * self.zoom))
+                d_surf = pygame.Surface((rad * 2 + 2, rad * 2 + 2), pygame.SRCALPHA)
+                col = (*dust_main, dust_a) if i % 3 != 0 else (*dust_sparkle, dust_a)
+                pygame.draw.circle(d_surf, col, (rad + 1, rad + 1), rad)
+                sh_surf.blit(d_surf, (pt[0] - rad - 1, pt[1] - rad - 1))
+
+        surface.blit(sh_surf, (0, 0))
+
     def draw(self, surface, state, motion=None, intro_t=None, outro_t=None, shockwave=None):
         if surface.get_size() != self.size:
             self.resize(surface.get_size())
@@ -862,16 +1033,24 @@ class IsometricRenderer:
             surface.fill((0, 0, 0, 0) if surface.get_flags() & pygame.SRCALPHA else self.BACKGROUND)
             return
 
-        shown = motion.before if motion and motion.progress < .65 else state
+        changing_bridges = ()
+        if motion and motion.before.bridges_status != motion.after.bridges_status:
+            changing_bridges = tuple(
+                i for i, (b_old, b_new) in enumerate(zip(motion.before.bridges_status, motion.after.bridges_status))
+                if b_old != b_new
+            )
+        shown = motion.before if motion and (motion.progress < .65 or changing_bridges) else state
         broken = (self._broken_tile(motion.after)
                   if motion and motion.falling and motion.progress >= FALL_ROLL_END else None)
-        static_key = (self.size, self.camera, self.zoom, tuple(self.pan), self.high_contrast, shown.bridges_status, broken)
+        static_key = (self.size, self.camera, self.zoom, tuple(self.pan), self.high_contrast, shown.bridges_status, changing_bridges, broken)
         material_key = (self.size, self.camera, self.zoom, self.high_contrast, self.style)
         if material_key != self._material_key:
             self.material_cache.clear()
+            if hasattr(self, '_bridge_tile_sprites'):
+                self._bridge_tile_sprites.clear()
             self._material_key = material_key
         if static_key != self._static_key:
-            self._build_static(shown, broken)
+            self._build_static(shown, broken, changing_bridges=changing_bridges)
             self._static_key = static_key
 
         if intro_t is not None:
@@ -994,14 +1173,13 @@ class IsometricRenderer:
                     r, c = coord
                     tile_top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
                     bridge = self.bridge_cells.get(coord)
-                    color = (112, 145, 151) if bridge is not None else ((178, 200, 193) if self.high_contrast else self.FLOOR)
+                    color = self.BLOCK if bridge is not None else ((178, 200, 193) if self.high_contrast else self.FLOOR)
                     self._material(self._frame, tile_top, color)
                     self._marker(self._frame, (r + 0.5, c + 0.5, -0.05), sw_label)
 
-            # Dynamic mechanical bridge ascension / descent
+            # Dynamic bridge ascension & shattering collapse
             if motion and motion.before.bridges_status != motion.after.bridges_status:
-                b_p = max(0.0, min(1.0, (motion.progress - 0.25) / 0.75))
-                b_ease = 1.0 - (1.0 - b_p) ** 3
+                b_p = max(0.0, min(1.0, motion.progress))
                 for coord, b_idx in self.bridge_cells.items():
                     if b_idx < len(motion.before.bridges_status) and b_idx < len(motion.after.bridges_status):
                         old_s = motion.before.bridges_status[b_idx]
@@ -1009,25 +1187,34 @@ class IsometricRenderer:
                         if old_s != new_s:
                             br_r, br_c = coord
                             if not old_s and new_s:
-                                # Bridge Opening: Smooth hydraulic ascension from the abyss
-                                b_z = -2.8 * (1.0 - b_ease)
-                                b_col = (135, 175, 185) if not self.high_contrast else (195, 220, 230)
-                                b_verts, b_idx_list = bevel_mesh(cuboid(br_r + .012, br_c + .012, b_z - .32, .976, .976, .32), .02)
-                                for _, b_pts, b_ink, _ in sorted(self._faces(b_verts, b_col, faces=b_idx_list), key=lambda it: it[0]):
-                                    pygame.draw.polygon(self._frame, b_ink, b_pts)
-                                pygame.draw.aalines(self._frame, (120, 240, 255), True, [self.project(p) for p in cuboid(br_r, br_c, b_z, 1, 1, 0)[:4]])
+                                # 1. Bridge Opening: Launching from below the game window frame straight into place
+                                spr, (bx, by) = self._get_bridge_sprite(coord)
+                                y_start = self.size[1] + 60
+                                b_ease = 1.0 - (1.0 - b_p) ** 3.0
+                                cur_y = int(by + (y_start - by) * (1.0 - b_ease))
+
+                                # High-energy ascension thrust streak
+                                streak_h = max(4, int(52 * (1.0 - b_ease)))
+                                trail_col = {'dream': (255, 180, 220, 160), 'forest': (255, 215, 60, 160), 'blueprint': (80, 220, 255, 160)}.get(self.style, (255, 255, 255, 160))
+                                for sx in (bx + 8, bx + spr.get_width() - 8, bx + spr.get_width() // 2):
+                                    streak_surf = pygame.Surface((4, streak_h + 2), pygame.SRCALPHA)
+                                    pygame.draw.line(streak_surf, trail_col, (2, 0), (2, streak_h), 2)
+                                    self._frame.blit(streak_surf, (sx - 2, cur_y + spr.get_height() - 4))
+
+                                # Pre-baked bridge tile sprite blit (0.005 ms)
+                                self._frame.blit(spr, (bx, cur_y))
+
+                                # Arrival energy snap ring
                                 if b_p >= 0.84:
-                                    pygame.draw.aalines(self._frame, (255, 255, 255), True, [self.project(p) for p in cuboid(br_r, br_c, 0.01, 1, 1, 0)[:4]])
+                                    snap_a = int(240 * (b_p - 0.84) / 0.16)
+                                    top_p = [self.project(p) for p in cuboid(br_r, br_c, 0.01, 1, 1, 0)[:4]]
+                                    snap_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+                                    snap_col = {'dream': (255, 220, 240, snap_a), 'forest': (255, 245, 160, snap_a), 'blueprint': (140, 240, 255, snap_a)}.get(self.style, (255, 255, 255, snap_a))
+                                    pygame.draw.aalines(snap_surf, snap_col, True, top_p)
+                                    self._frame.blit(snap_surf, (0, 0))
                             elif old_s and not new_s:
-                                # Bridge Closing: Sinking down into the abyss with fading alpha
-                                b_z = -4.5 * (b_p ** 1.8)
-                                b_alpha = max(0, int(230 * (1.0 - b_p)))
-                                if b_alpha > 0:
-                                    b_surf = pygame.Surface(self.size, pygame.SRCALPHA)
-                                    top_p = [self.project(p) for p in cuboid(br_r + .012, br_c + .012, b_z, .976, .976, 0)[:4]]
-                                    pygame.draw.polygon(b_surf, (80, 110, 120, b_alpha), top_p)
-                                    pygame.draw.aalines(b_surf, (160, 200, 215, b_alpha), True, top_p)
-                                    self._frame.blit(b_surf, (0, 0))
+                                # 2. Bridge Closing: Shatter into 12 3D tumbling debris shards falling past bottom frame + billowing dust
+                                self._render_bridge_shatter(self._frame, coord, b_p)
 
             # Work only on the small projected shadow footprint, not the full viewport.
             shadow_meshes=([(v,a) for v,a,moving in tagged if not moving] if falling and dropping
