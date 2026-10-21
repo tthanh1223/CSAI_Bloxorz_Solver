@@ -341,7 +341,14 @@ class IsometricRenderer:
     BACKGROUND = theme.BG
     FLOOR = theme.FLOOR
     BLOCK = theme.BLOCK
-    FRAGILE = (202, 167, 145)
+    @property
+    def FRAGILE(self):
+        if getattr(self, 'style', None) == 'dream':
+            return (226, 212, 218)
+        elif getattr(self, 'style', None) == 'forest':
+            return (168, 166, 144)
+        else:
+            return (235, 226, 212)
 
     def __init__(self, camera: Camera3D | None = None):
         self.camera = camera or Camera3D()
@@ -1272,83 +1279,195 @@ class IsometricRenderer:
             pygame.draw.aalines(surface, collar_col, True, outer_rim)
 
         elif kind == 'O':
-            # SOFT SWITCH: Clean circular tactile pressure disc with illuminated amber core
-            base_pts = [project(0.32 * cos(i * pi / 12), 0.32 * sin(i * pi / 12)) for i in range(24)]
-            ring_pts = [project(0.26 * cos(i * pi / 12), 0.26 * sin(i * pi / 12)) for i in range(24)]
-            btn_pts = [project(0.18 * cos(i * pi / 12), 0.18 * sin(i * pi / 12), 0.015 if not pressed else -0.02) for i in range(24)]
-            core_pts = [project(0.08 * cos(i * pi / 8), 0.08 * sin(i * pi / 8), 0.02 if not pressed else -0.01) for i in range(16)]
+            # SOFT SWITCH: Faceted Holographic Citrine Solenoid Gem with Orbital Ring & Specular Apex
+            base_pts = [project(0.34 * cos(i * pi / 6), 0.34 * sin(i * pi / 6)) for i in range(12)]
+            bezel_pts = [project(0.28 * cos(i * pi / 6), 0.28 * sin(i * pi / 6)) for i in range(12)]
+            pygame.draw.polygon(surface, (18, 22, 30), base_pts)
+            pygame.draw.polygon(surface, (40, 48, 62) if not pressed else (26, 32, 42), bezel_pts)
+            pygame.draw.aalines(surface, (68, 80, 100), True, base_pts)
 
-            pygame.draw.polygon(surface, (22, 26, 34), base_pts)
-            rim_col = (52, 60, 76) if not pressed else (32, 38, 48)
-            pygame.draw.polygon(surface, rim_col, ring_pts)
+            orb_pts = [project(0.36 * cos(i * pi / 8), 0.36 * sin(i * pi / 8), 0.01) for i in range(16)]
+            ring_glow = (255, 235, 140) if not pressed else (255, 255, 200)
+            pygame.draw.aalines(surface, ring_glow, True, orb_pts)
+            for k in (0, 4, 8, 12):
+                node_pt = orb_pts[k]
+                pygame.draw.circle(surface, (255, 255, 255), (round(node_pt[0]), round(node_pt[1])), 2)
 
-            btn_col = (255, 230, 95) if pressed else ((242, 172, 42) if not self.high_contrast else (255, 220, 60))
-            pygame.draw.polygon(surface, btn_col, btn_pts)
-            pygame.draw.polygon(surface, (255, 255, 235), core_pts)
+            dz_gem = 0.035 if not pressed else -0.015
+            dz_apex = dz_gem + (0.045 if not pressed else 0.015)
+            apex = project(0, 0, dz_apex)
+            eq_pts = [project(0.22 * cos(i * pi / 4), 0.22 * sin(i * pi / 4), dz_gem) for i in range(8)]
 
-            pygame.draw.aalines(surface, (255, 245, 185) if pressed else (255, 215, 130), True, btn_pts)
-            pygame.draw.aalines(surface, (16, 20, 26), True, base_pts)
+            if self.style == 'dream':
+                c_light = (255, 245, 175)
+                c_mid = (255, 195, 65)
+                c_dark = (215, 130, 25)
+            elif self.style == 'forest':
+                c_light = (255, 250, 160)
+                c_mid = (245, 185, 35)
+                c_dark = (195, 125, 15)
+            else:  # blueprint
+                c_light = (255, 240, 170)
+                c_mid = (235, 165, 40)
+                c_dark = (180, 110, 20)
+
+            facet_colors = [c_light, c_light, c_mid, c_dark, c_dark, c_dark, c_mid, c_light]
+            for i in range(8):
+                tri = [apex, eq_pts[i], eq_pts[(i + 1) % 8]]
+                col = facet_colors[i] if not pressed else tuple(max(0, c - 30) for c in facet_colors[i])
+                pygame.draw.polygon(surface, col, tri)
+                pygame.draw.aaline(surface, (255, 255, 255), apex, eq_pts[i])
+                pygame.draw.aaline(surface, (255, 255, 255), eq_pts[i], eq_pts[(i + 1) % 8])
+
+            pygame.draw.circle(surface, (255, 255, 255), (round(apex[0]), round(apex[1])), 2)
 
         elif kind == 'X':
-            # HEAVY SWITCH: Clean, modern beveled industrial cross plate with ruby core
+            # HEAVY SWITCH: Faceted Crystalline Ruby Cross with Holographic Diamond Field
             pad = [project(-.35, -.35), project(-.35, .35), project(.35, .35), project(.35, -.35)]
-            pygame.draw.polygon(surface, (20, 24, 32), pad)
-            pygame.draw.aalines(surface, (48, 56, 72), True, pad)
+            inner_pad = [project(-.30, -.30), project(-.30, .30), project(.30, .30), project(.30, -.30)]
+            pygame.draw.polygon(surface, (18, 22, 30), pad)
+            pygame.draw.polygon(surface, (28, 34, 46) if not pressed else (20, 24, 32), inner_pad)
+            pygame.draw.aalines(surface, (56, 68, 88), True, pad)
 
+            dia_ring = [project(-.33, 0, .01), project(0, .33, .01), project(.33, 0, .01), project(0, -.33, .01)]
+            pygame.draw.aalines(surface, (255, 110, 120), True, dia_ring)
+            for r_pt in dia_ring:
+                pygame.draw.circle(surface, (255, 180, 185), (round(r_pt[0]), round(r_pt[1])), 2)
+
+            dz_arm = 0.03 if not pressed else -0.015
+            dz_ridge = dz_arm + (0.035 if not pressed else 0.015)
+            arm_l = 0.27
             arm_w = 0.082
-            arm_l = 0.26
-            dz_arm = 0.02 if not pressed else -0.02
-            p1 = [
-                project(-arm_l, -arm_l + arm_w, dz_arm),
-                project(-arm_l + arm_w, -arm_l, dz_arm),
-                project(arm_l, arm_l - arm_w, dz_arm),
-                project(arm_l - arm_w, arm_l, dz_arm)
-            ]
-            p2 = [
-                project(-arm_l, arm_l - arm_w, dz_arm),
-                project(-arm_l + arm_w, arm_l, dz_arm),
-                project(arm_l, -arm_l + arm_w, dz_arm),
-                project(arm_l - arm_w, -arm_l, dz_arm)
-            ]
-            x_col = (255, 95, 80) if pressed else ((230, 48, 38) if not self.high_contrast else (255, 35, 35))
-            pygame.draw.polygon(surface, x_col, p1)
-            pygame.draw.polygon(surface, x_col, p2)
-            pygame.draw.aalines(surface, (255, 210, 205) if pressed else (255, 175, 165), True, p1)
-            pygame.draw.aalines(surface, (255, 210, 205) if pressed else (255, 175, 165), True, p2)
 
-            center_dot = [project(0.065 * cos(i * pi / 6), 0.065 * sin(i * pi / 6), dz_arm + 0.01) for i in range(12)]
-            pygame.draw.polygon(surface, (255, 255, 255), center_dot)
+            r_light = (255, 140, 130) if not pressed else (240, 100, 95)
+            r_mid = (235, 48, 58) if not pressed else (195, 32, 42)
+            r_dark = (160, 20, 30) if not pressed else (125, 15, 22)
+
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                tip_apex = project(dr * arm_l, dc * arm_l, dz_ridge)
+                tip_left = project(dr * arm_l - dc * arm_w, dc * arm_l + dr * arm_w, dz_arm)
+                tip_right = project(dr * arm_l + dc * arm_w, dc * arm_l - dr * arm_w, dz_arm)
+                base_left = project(-dc * arm_w, dr * arm_w, dz_arm)
+                base_right = project(dc * arm_w, -dr * arm_w, dz_arm)
+                c_apex = project(0, 0, dz_ridge + 0.01)
+
+                f1 = [c_apex, base_left, tip_left, tip_apex]
+                f2 = [c_apex, tip_apex, tip_right, base_right]
+
+                col1 = r_light if dr < 0 or dc < 0 else r_mid
+                col2 = r_mid if dr < 0 or dc < 0 else r_dark
+                pygame.draw.polygon(surface, col1, f1)
+                pygame.draw.polygon(surface, col2, f2)
+                pygame.draw.aalines(surface, (255, 215, 215), True, f1)
+                pygame.draw.aalines(surface, (255, 215, 215), True, f2)
+
+            c_dia = [project(0.065 * cos(i * pi / 2), 0.065 * sin(i * pi / 2), dz_ridge + 0.02) for i in range(4)]
+            pygame.draw.polygon(surface, (255, 255, 255), c_dia)
+            pygame.draw.circle(surface, (255, 255, 255), (round(project(0, 0, dz_ridge + 0.02)[0]), round(project(0, 0, dz_ridge + 0.02)[1])), 2)
 
         elif kind == '<>':
-            # SPLIT SWITCH: Sleek dual quantum chevrons in glowing electric cyan
-            base_pts = [project(-.35, -.35), project(-.35, .35), project(.35, .35), project(.35, -.35)]
-            pygame.draw.polygon(surface, (14, 24, 34), base_pts)
-            pygame.draw.aalines(surface, (32, 64, 88), True, base_pts)
+            # SPLIT SWITCH: Dual Faceted Quantum Chevrons & Central Faceted Diamond Core
+            base_pts = [project(-.36, -.36), project(-.36, .36), project(.36, .36), project(.36, -.36)]
+            pygame.draw.polygon(surface, (12, 22, 32), base_pts)
+            pygame.draw.aalines(surface, (36, 75, 105), True, base_pts)
 
-            cyan_main = (120, 250, 255) if pressed else (38, 215, 235)
-            cyan_glow = (200, 255, 255) if pressed else (120, 245, 255)
+            dz_q = 0.03 if not pressed else -0.015
+            cyan_light = (180, 255, 255) if not pressed else (120, 240, 255)
+            cyan_mid = (40, 225, 245) if not pressed else (25, 175, 205)
+            cyan_dark = (18, 140, 175) if not pressed else (12, 105, 135)
 
-            c_left = [project(-.22, -.06, .02), project(0, -.24, .02), project(.22, -.06, .02)]
-            c_left_inner = [project(-.18, -.06, .02), project(0, -.20, .02), project(.18, -.06, .02)]
-            c_right = [project(-.22, .06, .02), project(0, .24, .02), project(.22, .06, .02)]
-            c_right_inner = [project(-.18, .06, .02), project(0, .20, .02), project(.18, .06, .02)]
+            # Central Faceted Quantum Micro-Diamond
+            d_top = project(0, 0, dz_q + 0.06)
+            d_bot = project(0, 0, dz_q - 0.03)
+            d_eq = [project(0.08 * cos(k * pi / 2), 0.08 * sin(k * pi / 2), dz_q + 0.015) for k in range(4)]
+            pygame.draw.polygon(surface, cyan_light, [d_top, d_eq[0], d_eq[1]])
+            pygame.draw.polygon(surface, cyan_mid, [d_top, d_eq[1], d_eq[2]])
+            pygame.draw.polygon(surface, cyan_dark, [d_top, d_eq[2], d_eq[3]])
+            pygame.draw.polygon(surface, cyan_mid, [d_top, d_eq[3], d_eq[0]])
+            for k in range(4):
+                pygame.draw.aaline(surface, (255, 255, 255), d_top, d_eq[k])
+                pygame.draw.aaline(surface, (255, 255, 255), d_eq[k], d_eq[(k + 1) % 4])
 
-            pygame.draw.lines(surface, cyan_main, False, c_left, 3)
-            pygame.draw.aalines(surface, cyan_glow, False, c_left_inner)
-            pygame.draw.lines(surface, cyan_main, False, c_right, 3)
-            pygame.draw.aalines(surface, cyan_glow, False, c_right_inner)
+            # Left Faceted Quantum Chevron Prism `<`
+            c_tip_l = project(0, -.26, dz_q)
+            c_top_l = project(-.22, -.06, dz_q)
+            c_bot_l = project(.22, -.06, dz_q)
+            c_in_l = project(0, -.14, dz_q + 0.02)
+
+            f_left_top = [c_top_l, c_tip_l, c_in_l]
+            f_left_bot = [c_tip_l, c_bot_l, c_in_l]
+            pygame.draw.polygon(surface, cyan_light, f_left_top)
+            pygame.draw.polygon(surface, cyan_mid, f_left_bot)
+            pygame.draw.aalines(surface, (255, 255, 255), True, f_left_top)
+            pygame.draw.aalines(surface, (255, 255, 255), True, f_left_bot)
+
+            # Right Faceted Quantum Chevron Prism `>`
+            c_tip_r = project(0, .26, dz_q)
+            c_top_r = project(-.22, .06, dz_q)
+            c_bot_r = project(.22, .06, dz_q)
+            c_in_r = project(0, .14, dz_q + 0.02)
+
+            f_right_top = [c_top_r, c_tip_r, c_in_r]
+            f_right_bot = [c_tip_r, c_bot_r, c_in_r]
+            pygame.draw.polygon(surface, cyan_light, f_right_top)
+            pygame.draw.polygon(surface, cyan_mid, f_right_bot)
+            pygame.draw.aalines(surface, (255, 255, 255), True, f_right_top)
+            pygame.draw.aalines(surface, (255, 255, 255), True, f_right_bot)
+
+            pygame.draw.aaline(surface, (200, 255, 255), project(0, -.32, dz_q), project(0, .32, dz_q))
+            for offset_c in (-.32, -.26, 0, .26, .32):
+                p_node = project(0, offset_c, dz_q)
+                pygame.draw.circle(surface, (255, 255, 255), (round(p_node[0]), round(p_node[1])), 1)
 
         elif kind == '!':
-            # FRAGILE TILE: Organic, natural weathered marble hairline fracture fissures (NO artificial pads)
-            fissure_dark = (42, 28, 20)
-            fissure_light = (245, 215, 185)
-            fissures = [
-                [project(-.44, -.38), project(-.24, -.18), project(-.06, -.08), project(.14, .08), project(.32, .22), project(.46, .42)],
-                [project(-.06, -.08), project(-.12, .18), project(-.22, .36)],
-                [project(.14, .08), project(.28, -.14), project(.42, -.28)],
-                [project(-.38, .12), project(-.18, .04), project(0, -.02)],
-                [project(.06, .38), project(.22, .28)]
-            ]
-            for crack in fissures:
-                pygame.draw.lines(surface, fissure_dark, False, crack, 2)
-                pygame.draw.aalines(surface, fissure_light, False, crack)
+            # FRAGILE TILE: Procedural Unique Multi-Branch Fracture Network with 3D Light-and-Shadow Relief
+            seed = int(((r * 37 + c * 179 + 53) * 9301 + 49297) % 233280)
+
+            er = -0.06 + ((seed % 13) - 6) * 0.015
+            ec = -0.06 + (((seed // 13) % 13) - 6) * 0.015
+
+            if self.style == 'dream':
+                fissure_shadow = (75, 45, 58)
+                fissure_lit = (255, 245, 250)
+                dust_col = (245, 210, 225)
+            elif self.style == 'forest':
+                fissure_shadow = (34, 25, 18)
+                fissure_lit = (235, 225, 195)
+                dust_col = (195, 185, 155)
+            else:  # blueprint
+                fissure_shadow = (18, 52, 78)
+                fissure_lit = (130, 225, 255)
+                dust_col = (160, 215, 240)
+
+            corner_targets = [(-.44, -.42), (-.42, .44), (.44, .42), (.42, -.44)]
+            shift_idx = seed % 4
+
+            for i in range(4):
+                tgt_r, tgt_c = corner_targets[(i + shift_idx) % 4]
+                mid1_r = er + (tgt_r - er) * 0.38 + ((seed + i * 29) % 7 - 3) * 0.022
+                mid1_c = ec + (tgt_c - ec) * 0.38 + ((seed + i * 43) % 7 - 3) * 0.022
+                mid2_r = er + (tgt_r - er) * 0.72 + ((seed + i * 61) % 7 - 3) * 0.025
+                mid2_c = ec + (tgt_c - ec) * 0.72 + ((seed + i * 79) % 7 - 3) * 0.025
+
+                pts = [project(er, ec), project(mid1_r, mid1_c), project(mid2_r, mid2_c), project(tgt_r, tgt_c)]
+                lit_pts = [project(er - 0.008, ec - 0.008),
+                           project(mid1_r - 0.008, mid1_c - 0.008),
+                           project(mid2_r - 0.008, mid2_c - 0.008),
+                           project(tgt_r - 0.008, tgt_c - 0.008)]
+
+                pygame.draw.lines(surface, fissure_shadow, False, pts, 2)
+                pygame.draw.aalines(surface, fissure_lit, False, lit_pts)
+
+                if i % 2 == 0:
+                    trib_r = mid1_r + (mid2_c - mid1_c) * 0.45
+                    trib_c = mid1_c - (mid2_r - mid1_r) * 0.45
+                    t_pts = [project(mid1_r, mid1_c), project(trib_r, trib_c)]
+                    pygame.draw.lines(surface, fissure_shadow, False, t_pts, 1)
+                    pygame.draw.aalines(surface, fissure_lit, False, [project(mid1_r - 0.006, mid1_c - 0.006), project(trib_r - 0.006, trib_c - 0.006)])
+
+            for k in range(3):
+                p_r = er + ((seed + k * 17) % 9 - 4) * 0.02
+                p_c = ec + ((seed + k * 31) % 9 - 4) * 0.02
+                chip_pt = project(p_r, p_c)
+                pygame.draw.circle(surface, fissure_shadow, (round(chip_pt[0]), round(chip_pt[1])), 1)
+                pygame.draw.circle(surface, dust_col, (round(chip_pt[0] - 1), round(chip_pt[1] - 1)), 1)

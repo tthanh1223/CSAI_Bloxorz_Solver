@@ -175,9 +175,12 @@ def _draw(app):
         pygame.draw.rect(panel, (*T.PANEL, 238), panel.get_rect(), border_radius=20)
         pygame.draw.rect(panel, (*T.LINE, 180), panel.get_rect(), 1, border_radius=20)
     else:
-        pygame.draw.rect(panel, (*T.PANEL, 228 if forest else 244), panel.get_rect(), border_radius=22)
-        border_col = (*T.LINE, 160) if forest else (255, 255, 255, 140)
+        panel_alpha = 228 if forest else 208
+        pygame.draw.rect(panel, (*T.PANEL, panel_alpha), panel.get_rect(), border_radius=22)
+        border_col = (*T.LINE, 160) if forest else (255, 255, 255, 175)
         pygame.draw.rect(panel, border_col, panel.get_rect(), 1, border_radius=22)
+        if not forest and style == 'dream':
+            pygame.draw.line(panel, (255, 255, 255, 160), (22, 1), (panel.get_width() - 22, 1), 1)
     screen.blit(panel, (panel_x - 16, 76))
 
     # High-contrast frosted glass container badge for logo & move counter
