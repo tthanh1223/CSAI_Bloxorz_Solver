@@ -41,11 +41,16 @@ class BloxorzProblem:
                 continue
 
             blocks = self._blocks_for_state(moved_state)
+            # Chỉ những ô khối vừa đè lên mới kích hoạt switch. Khi bị tách, khối
+            # nhỏ đứng yên vẫn nằm trong `blocks` nhưng không "bấm" switch lần nữa.
+            previous = set(self._blocks_for_state(state))
+            pressed = [cell for cell in blocks if cell not in previous]
             next_blocks, is_split, bridge_mask = apply_tile_effects(
                 blocks,
                 moved_state.orientation == Orientation.SPLIT, #ở đây là một bool nha, coi đọc hong hiểu
                 moved_state.bridges_status,
                 self.stage_data,
+                pressed,
             )
             next_state = self._state_from_blocks(
                 next_blocks,

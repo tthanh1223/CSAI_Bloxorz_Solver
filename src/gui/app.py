@@ -612,13 +612,16 @@ class BloxorzApp:
         if pygame.mixer.get_init():
             from src.gui.sfx import SoundBank
             self.sound = SoundBank()
+        else:
+            self.sound_enabled = False  # no audio device: Settings should say Off
         clock = pygame.time.Clock()
         try:
             running = True
             while running:
                 dt = min(clock.tick(60) / 1000, 0.1)
                 for event in pygame.event.get():
-                    if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open)):
+                    if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open
+                                                                                                                or self.win_phase == 'choice')):
                         running = False
                     else:
                         self.handle_event(event)
