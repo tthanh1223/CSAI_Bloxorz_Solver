@@ -20,7 +20,7 @@ ACCENT = (235, 151, 99)
 ACCENT_HOVER = (247, 170, 118)
 INK = (255, 251, 240)
 FLOOR = (218, 226, 213)
-BLOCK = (199, 174, 132)
+BLOCK = (242, 177, 132)
 
 
 @lru_cache(maxsize=6)

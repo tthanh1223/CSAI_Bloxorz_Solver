@@ -481,9 +481,10 @@ class IsometricRenderer:
                 # Bevel polygons provide edge shading; avoid stacking outlines.
             elif kind=='marker':self._marker(self._base,*payload)
             else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
-        seam={'dream':(48,47,48),'blueprint':(48,47,48),'forest':(102,112,80)}.get(self.style,(168,174,163))
+        soft_edges=self.style in ('dream','blueprint')
+        seam={'dream':(244,242,229),'blueprint':(255,246,225),'forest':(102,112,80)}.get(self.style,(168,174,163))
         seams=pygame.Surface(self.size,pygame.SRCALPHA)
-        for outline in tile_outlines:pygame.draw.aalines(seams,(*seam,145),True,outline)
+        for outline in tile_outlines:pygame.draw.aalines(seams,(*seam,38 if soft_edges else 145),True,outline)
         self._base.blit(seams,(0,0))
         if self.style=='forest':self._moss_edges(shown)
         # Retain a bounded number of full-size buffers, never one per state.
@@ -591,8 +592,8 @@ class IsometricRenderer:
         pts=[(round(x),round(y)) for x,y in points]
         if self._can_texture(surface,pts):
             pygame.gfxdraw.textured_polygon(surface,pts,texture,pts[0][0],pts[0][1])
-        # User-selected charcoal contour for the two architectural themes.
-        edge=(48,47,48) if self.style in ('dream','blueprint') else color
+        # A faint, antialiased one-pixel contour follows each face's shading.
+        edge=tuple(round(c*.92+255*.08) for c in color) if self.style in ('dream','blueprint') else color
         self._outline(surface,edge,pts,cut)
 
     @staticmethod
@@ -724,6 +725,14 @@ class IsometricRenderer:
         a,b,_,d=points
         warm=color[0]>color[1]*1.12
         palette=((248,242,218),(170,152,177),(186,198,183),(240,211,183),(251,247,229))
+        if self.style=='dream':
+            # Fine ceramic grain beneath the existing pastel terrazzo chips.
+            rng=random.Random(103)
+            for _ in range(180):
+                u,v=rng.uniform(.02,.98),rng.uniform(.02,.98)
+                p=(a[0]+(b[0]-a[0])*u+(d[0]-a[0])*v,a[1]+(b[1]-a[1])*u+(d[1]-a[1])*v)
+                delta=rng.choice((-6,-3,3,6))
+                pygame.draw.line(surface,tuple(max(0,min(255,c+delta)) for c in color),p,p)
         if self.style=='blueprint':
             rng=random.Random(92)
             # Fine fibers and paper grain, without terrazzo inclusions.
