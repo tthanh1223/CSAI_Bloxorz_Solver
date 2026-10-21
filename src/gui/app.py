@@ -97,6 +97,8 @@ class BloxorzApp:
         # Win sequence (manual play only): 'roll' -> 'sink' -> 'choice' (replay or next stage).
         self.win_phase = None
         self.stage_cleared = False  # survives replaying the winning moves
+        self.intro_t: float | None = None
+        self.outro_t: float | None = None
 
     @property
     def busy(self):
@@ -114,6 +116,8 @@ class BloxorzApp:
         self.solver_status = SolverStatus.IDLE
         self.wait = 0
         self.stage_cleared = False
+        self.intro_t = None
+        self.outro_t = None
 
     def new_session(self, state):
         self.win_phase = None  # any reload/restart/replay cancels the win sequence
@@ -138,15 +142,20 @@ class BloxorzApp:
         self.zoom, self.pan = 1.0, [0, 0]
         self.stage_picker = False
         self.message = 'Stage loaded. Arrow keys / WASD to roll.'
+        if self.animate:
+            self.intro_t = 0.0
 
     def restart(self):
         self.invalidate()
         self.new_session(initial_state(self.stage))
         self.message = 'Stage restarted.'
+        if self.animate:
+            self.intro_t = 0.0
 
     def apply_action(self, action, replay=False):
         if self.busy or self.animation.busy:
             return False
+        self.intro_t = None
         if not replay and self.replay.status != ReplayStatus.EMPTY:
             self.message = 'Exit replay to play manually.'
             return False
@@ -208,7 +217,7 @@ class BloxorzApp:
 
     def advance_win(self):
         """Called every update(): drive the win sequence one step forward."""
-        if self.win_phase in (None, 'choice') or self.animation.busy:
+        if self.win_phase in (None, 'choice', 'disassemble') or self.animation.busy:
             return
         if self.session.status != 'WON':  # e.g. undone before the sink started
             self.win_phase = None
@@ -219,6 +228,10 @@ class BloxorzApp:
             self.animation.start(goal, goal, self.actions[-1], sinking=True)
             self.win_phase = 'sink'
             self.message = 'Stage complete!'
+            return
+        if self.win_phase == 'sink' and self.animate:
+            self.win_phase = 'disassemble'
+            self.outro_t = 0.0
             return
         # Sink finished (or animation is off): let the player replay or move on.
         self.win_phase = 'choice'
@@ -421,6 +434,17 @@ class BloxorzApp:
 
     def update(self, dt):
         self.animation.update(dt)
+        if self.intro_t is not None:
+            self.intro_t += dt / 0.85
+            if self.intro_t >= 1.0:
+                self.intro_t = None
+        if self.win_phase == 'disassemble' and self.outro_t is not None:
+            self.outro_t += dt / 0.50
+            if self.outro_t >= 1.0:
+                self.outro_t = None
+                self.win_phase = 'choice'
+                self.stage_cleared = True
+                self.message = 'Stage complete!'
         if self.session.status == 'LOST' and not self.animation.busy:
             self.finish_fall()
         self.advance_win()

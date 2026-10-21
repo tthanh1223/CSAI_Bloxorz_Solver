@@ -67,8 +67,8 @@ def _draw(app):
     def label(value, x, y, color=T.TEXT, f=body, max_width=None):
         text(screen, f, value, (x, y), color, max_width)
 
-    def button(key, value, x, y, width, enabled=True, kind='secondary', selected=False):
-        b = Button(key, value, pygame.Rect(x, y, width, T.BUTTON_HEIGHT), enabled, selected, kind)
+    def button(key, value, x, y, width, enabled=True, kind='secondary', selected=False, height=T.BUTTON_HEIGHT):
+        b = Button(key, value, pygame.Rect(x, y, width, height), enabled, selected, kind)
         app.buttons.append(b)
         b.draw(screen, body)
         return b
@@ -99,7 +99,8 @@ def _draw(app):
         app._board_surface = board
     app.renderer.zoom, app.renderer.pan = app.zoom, tuple(app.pan)
     app.renderer.high_contrast = app.high_contrast
-    app.renderer.draw(board, app.session.current_state, app.animation.frame)
+    app.renderer.draw(board, app.session.current_state, app.animation.frame,
+                      intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None))
     screen.blit(board, app.board_rect)
 
     # Right panel background container
@@ -123,7 +124,7 @@ def _draw(app):
     button('help', '?', w - 152, 20, 40, kind='quiet')
     button('settings', 'Settings', w - 108, 20, 88, kind='quiet')
 
-    idle = not app.busy and not app.animation.busy
+    idle = not app.busy and not app.animation.busy and getattr(app, 'intro_t', None) is None and getattr(app, 'outro_t', None) is None
     replaying = app.replay.status != ReplayStatus.EMPTY
     manual = idle and not replaying
 
@@ -139,29 +140,32 @@ def _draw(app):
         button('restart', 'Restart', start_x + btn_w + btn_gap, btn_y, btn_w, True, kind='pill')
         button('hint', 'Hint', start_x + (btn_w + btn_gap) * 2, btn_y, btn_w, manual, kind='pill')
     else:
-        dock_w = min(530, max(390, panel_x - 32))
+        dock_h = 48
+        dock_w = min(580, max(490, panel_x - 24))
         dock_x = app.board_rect.centerx - dock_w // 2
-        dock_surf = pygame.Surface((dock_w, 42), pygame.SRCALPHA)
-        pygame.draw.rect(dock_surf, (*T.PANEL, 228 if forest else 240), dock_surf.get_rect(), border_radius=21)
-        pygame.draw.rect(dock_surf, (*T.LINE, 180), dock_surf.get_rect(), 1, border_radius=21)
-        screen.blit(dock_surf, (dock_x, btn_y))
+        dock_y = h - 60
+        dock_surf = pygame.Surface((dock_w, dock_h), pygame.SRCALPHA)
+        pygame.draw.rect(dock_surf, (*T.PANEL, 235 if forest else 244), dock_surf.get_rect(), border_radius=24)
+        pygame.draw.rect(dock_surf, (*T.LINE, 180), dock_surf.get_rect(), 1, border_radius=24)
+        screen.blit(dock_surf, (dock_x, dock_y))
 
-        button('back', 'Back', dock_x + 8, btn_y + 1, 64, app.replay.index > 0, kind='dock_item')
+        btn_dock_y = dock_y + 6
+        button('back', 'Back', dock_x + 16, btn_dock_y, 70, app.replay.index > 0, kind='dock_item', height=36)
         button('play', 'Pause' if app.replay.status == ReplayStatus.PLAYING else 'Play',
-               dock_x + 78, btn_y + 1, 96, not app.busy, 'primary')
-        button('step', 'Next', dock_x + 180, btn_y + 1, 64, idle and app.replay.index < app.replay.length, kind='dock_item')
-        button('speed', f'{app.speed:g}×', dock_x + 250, btn_y + 1, 54, kind='dock_item')
+               dock_x + 92, btn_dock_y, 86, not app.busy, 'primary', height=36)
+        button('step', 'Next', dock_x + 184, btn_dock_y, 70, idle and app.replay.index < app.replay.length, kind='dock_item', height=36)
+        button('speed', f'{app.speed:g}×', dock_x + 260, btn_dock_y, 50, kind='dock_item', height=36)
 
-        timeline_x = dock_x + 312
-        seek_w = max(44, dock_w - 386)
-        app.seek_rect = pygame.Rect(timeline_x, btn_y + 18, seek_w, 6)
+        timeline_x = dock_x + 318
+        seek_w = max(44, dock_w - 388)
+        app.seek_rect = pygame.Rect(timeline_x, dock_y + 21, seek_w, 6)
         pygame.draw.rect(screen, T.LINE, app.seek_rect, border_radius=3)
         ratio = app.replay.index / max(1, app.replay.length)
         fill = app.seek_rect.copy()
         fill.width = int(fill.width * ratio)
         pygame.draw.rect(screen, T.ACCENT, fill, border_radius=3)
         pygame.draw.circle(screen, T.ACCENT, (app.seek_rect.x + fill.width, app.seek_rect.centery), 5)
-        label(f'{app.replay.index}/{app.replay.length}', timeline_x + seek_w + 10, btn_y + 11, T.MUTED, f=caption)
+        label(f'{app.replay.index}/{app.replay.length}', timeline_x + seek_w + 10, dock_y + 15, T.MUTED, f=caption)
 
     # Toast status message (Clean floating chip above controls - Never overlaps buttons)
     message = app.message

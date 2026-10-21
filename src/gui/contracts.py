@@ -141,6 +141,8 @@ class BoardRenderer(Protocol):
     def draw(
         self, surface: Surface, state: GameState,
         motion: MotionFrame | None = None,
+        intro_t: float | None = None,
+        outro_t: float | None = None,
     ) -> None:
         """Draw only on the dedicated board surface; never mutate state."""
         ...

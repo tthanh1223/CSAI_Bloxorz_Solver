@@ -117,8 +117,8 @@ class Button:
         # Smooth interactive animation tracking (60fps ease)
         btn_id = f"{self.key}_{self.rect.x}_{self.rect.y}"
         anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0})
-        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.35
-        anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.45
+        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.40
+        anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.50
         if not hover and anim['hover'] < 0.002:
             anim['hover'] = 0.0
         if not pressed and anim['press'] < 0.002:
@@ -127,16 +127,16 @@ class Button:
         p_t = anim['press']
 
         # Physical translation: lift up smoothly on hover, depress down on click
-        dy = -round(h_t * 2.0) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
+        dy = -round(h_t * 2.5) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
         draw_rect = self.rect.move(0, dy)
 
         # Soft dynamic drop shadow when lifted / enabled
         if self.enabled and self.kind != 'quiet':
-            shadow_offset = round(2.0 + h_t * 2.5 - p_t * 1.5)
+            shadow_offset = round(2.0 + h_t * 3.0 - p_t * 1.5)
             shadow_rect = self.rect.move(0, shadow_offset)
             shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
             radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
-            pygame.draw.rect(shadow_surf, (0, 0, 0, int(25 + 35 * h_t)), shadow_surf.get_rect(), border_radius=radius)
+            pygame.draw.rect(shadow_surf, (0, 0, 0, int(20 + 45 * h_t)), shadow_surf.get_rect(), border_radius=radius)
             surface.blit(shadow_surf, shadow_rect)
 
         # Smooth color transitions
@@ -204,6 +204,11 @@ class Button:
                 gradient.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
                 surface.blit(gradient, draw_rect)
             elif self.kind != 'quiet':
+                if self.enabled and h_t > 0.01:
+                    # Luminous top-edge glass sheen on hover
+                    sheen = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+                    pygame.draw.line(sheen, (255, 255, 255, int(50 * h_t)), (radius, 1), (draw_rect.width - radius, 1), 1)
+                    surface.blit(sheen, draw_rect)
                 border_color = lerp_color(theme.LINE, theme.ACCENT, h_t) if (self.enabled and h_t > 0) else theme.LINE
                 pygame.draw.rect(surface, border_color, draw_rect, 1, border_radius=radius)
 
@@ -216,11 +221,12 @@ class Button:
 
         if has_vector_icon and (self.kind in ('dock_item', 'icon') or (self.kind == 'pill' and self.key in ('undo', 'restart', 'hint'))):
             # Draw icon on the left, label on the right
-            icon_cx = draw_rect.x + 22
+            is_dock = self.kind == 'dock_item'
+            icon_cx = draw_rect.x + (16 if is_dock else 22)
             icon_cy = draw_rect.centery
-            draw_vector_icon(surface, icon_name, (icon_cx, icon_cy), foreground, size=15)
+            draw_vector_icon(surface, icon_name, (icon_cx, icon_cy), foreground, size=13 if is_dock else 15)
             lbl = font.render(self.label, True, foreground)
-            lbl_rect = lbl.get_rect(midleft=(icon_cx + 12, draw_rect.centery))
+            lbl_rect = lbl.get_rect(midleft=(icon_cx + (9 if is_dock else 12), draw_rect.centery))
             surface.blit(lbl, lbl_rect)
         else:
             # Centered label

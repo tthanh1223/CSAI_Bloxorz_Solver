@@ -5,14 +5,18 @@ import math
 import random
 import pygame
 
-ASSET = Path(__file__).resolve().parents[2] / 'assets' / 'dream_city_background.png'
+ASSET_DIR = Path(__file__).resolve().parents[2] / 'assets'
 
 
 @lru_cache(maxsize=3)
 def background(size, style='dream', cells=(), stage_index=0):
     if style == 'blueprint':
         return blueprint(size, cells, stage_index)
-    asset = ASSET.with_name('forest_ruins_background.png') if style == 'forest' else ASSET
+    if style == 'forest':
+        asset = ASSET_DIR / 'forest_ruins_background.png'
+    else:
+        new_asset = ASSET_DIR / 'wide_dreamy_fantasy_landscape_scene_pastel_pink.png'
+        asset = new_asset if new_asset.exists() else ASSET_DIR / 'dream_city_background.png'
     if asset.exists():
         image = pygame.image.load(str(asset))
         scale = max(size[0] / image.get_width(), size[1] / image.get_height())

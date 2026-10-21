@@ -48,6 +48,7 @@ def main():
         path=app.result.path
         for name in ('dream','blueprint','forest'):
             app.restart();apply_theme(app,name)
+            app.update(1.0)
             app.screen=pygame.display.set_mode((1180,800),pygame.RESIZABLE)
             capture(f'{name}_01_play')
             before=app.session.current_state
