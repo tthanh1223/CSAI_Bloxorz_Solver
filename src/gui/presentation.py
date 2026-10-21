@@ -113,6 +113,62 @@ def draw_confetti(screen, ticks, w, h):
         screen.blit(conf_surf, (x - pw // 2, y - ph // 2))
 
 
+def draw_frosted_glass_panel(screen: pygame.Surface, rect: pygame.Rect, style: str, border_radius: int = 22) -> None:
+    """Render authentic optical-blur frosted glass panel with specular highlights and soft shadow."""
+    rect = rect.clamp(screen.get_rect())
+    w, h = rect.size
+    if w <= 8 or h <= 8:
+        return
+
+    # 1. Optical Background Blur: sample current scene pixels before drawing shadow
+    sub = screen.subsurface(rect).copy()
+    bw = max(4, w // 4)
+    bh = max(4, h // 4)
+    small = pygame.transform.smoothscale(sub, (bw, bh))
+    blurred_raw = pygame.transform.smoothscale(small, (w, h))
+
+    # Rounded mask with smooth corners
+    blurred = pygame.Surface((w, h), pygame.SRCALPHA)
+    mask = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=border_radius)
+    blurred.blit(blurred_raw, (0, 0))
+    blurred.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+    # 2. Ambient Bottom Contact Shadow (strictly within rect.x boundary so it never bleeds into board_rect)
+    bot_shadow = pygame.Surface((w, 8), pygame.SRCALPHA)
+    for sy in range(8):
+        a = int(34 * (1.0 - sy / 8.0) ** 1.5)
+        pygame.draw.line(bot_shadow, (0, 0, 0, a), (border_radius, sy), (w - border_radius, sy))
+    screen.blit(bot_shadow, (rect.x, rect.bottom))
+
+    # 3. Translucent Frosted Glass Tint & Specular Rim Light
+    tint = pygame.Surface((w, h), pygame.SRCALPHA)
+    if style == 'dream':
+        t_col = (255, 246, 250, 142)
+        border_col = (255, 255, 255, 185)
+        specular_col = (255, 255, 255, 220)
+        inner_glow = (255, 235, 242, 55)
+    elif style in ('forest', 'forest_gl'):
+        t_col = (18, 30, 24, 155)
+        border_col = (120, 170, 140, 155)
+        specular_col = (210, 245, 225, 175)
+        inner_glow = (140, 195, 160, 40)
+    else:  # blueprint
+        t_col = (12, 30, 50, 160)
+        border_col = (60, 150, 205, 165)
+        specular_col = (165, 230, 255, 195)
+        inner_glow = (80, 180, 230, 35)
+
+    pygame.draw.rect(tint, t_col, tint.get_rect(), border_radius=border_radius)
+    pygame.draw.rect(tint, inner_glow, tint.get_rect().inflate(-2, -2), 1, border_radius=max(1, border_radius - 1))
+    pygame.draw.rect(tint, border_col, tint.get_rect(), 1, border_radius=border_radius)
+    if w > border_radius * 2:
+        pygame.draw.line(tint, specular_col, (border_radius, 1), (w - border_radius, 1), 1)
+
+    blurred.blit(tint, (0, 0))
+    screen.blit(blurred, rect.topleft)
+
+
 def _draw(app):
     screen = app.screen
     w, h = screen.get_size()
@@ -170,19 +226,29 @@ def _draw(app):
         draw_rect = app.board_rect.move(shake_x, shake_y)
     screen.blit(board, draw_rect)
 
-    # Right panel background container
-    panel = pygame.Surface((T.PANEL_WIDTH + 32, h - 100), pygame.SRCALPHA)
-    if style == 'blueprint':
-        pygame.draw.rect(panel, (*T.PANEL, 238), panel.get_rect(), border_radius=20)
-        pygame.draw.rect(panel, (*T.LINE, 180), panel.get_rect(), 1, border_radius=20)
+    idle = not app.busy and not app.animation.busy and getattr(app, 'intro_t', None) is None and getattr(app, 'outro_t', None) is None
+    replaying = app.replay.status != ReplayStatus.EMPTY
+    manual = idle and not replaying
+
+    # Dynamic card height hugs content to eliminate all redundant empty space
+    if replaying:
+        card_h = 360 if (app.stage_cleared and app.stage_index + 1 < len(app.stage_paths)) else 312
+    elif app.busy:
+        card_h = 254
+    elif app.result and app.result.found:
+        card_h = 436 if app.details_open else 328
     else:
-        panel_alpha = 228 if forest else 208
-        pygame.draw.rect(panel, (*T.PANEL, panel_alpha), panel.get_rect(), border_radius=22)
-        border_col = (*T.LINE, 160) if forest else (255, 255, 255, 175)
-        pygame.draw.rect(panel, border_col, panel.get_rect(), 1, border_radius=22)
-        if not forest and style == 'dream':
-            pygame.draw.line(panel, (255, 255, 255, 160), (22, 1), (panel.get_width() - 22, 1), 1)
-    screen.blit(panel, (panel_x - 16, 76))
+        if app.dropdown_open or app.solver_status in (SolverStatus.ERROR, SolverStatus.TIMEOUT, SolverStatus.NO_SOLUTION, SolverStatus.CANCELLED):
+            card_h = 368
+        else:
+            card_h = 326
+    if getattr(app, 'large_text', False):
+        card_h += 8
+    card_h = min(card_h, h - 96)
+
+    # Right panel frosted glass container
+    card_rect = pygame.Rect(panel_x - 16, 80, T.PANEL_WIDTH + 32, card_h)
+    draw_frosted_glass_panel(screen, card_rect, style, border_radius=22)
 
     # High-contrast frosted glass container badge for logo & move counter
     badge_rect = pygame.Rect(20, 10, 192, 58)
@@ -213,10 +279,6 @@ def _draw(app):
     button('choose', f'Stage {app.stage_index + 1:02}', panel_x - 32, 20, 128, bool(app.stage_paths), 'quiet')
     button('help', '?', w - 152, 20, 40, kind='quiet')
     button('settings', 'Settings', w - 108, 20, 88, kind='quiet')
-
-    idle = not app.busy and not app.animation.busy and getattr(app, 'intro_t', None) is None and getattr(app, 'outro_t', None) is None
-    replaying = app.replay.status != ReplayStatus.EMPTY
-    manual = idle and not replaying
 
     # Centered Floating Controls (Bottom Bar) - Clean pills with NO rectangular background container
     btn_y = h - 56
@@ -380,7 +442,8 @@ def _draw(app):
             label(status[app.solver_status], x, y + 276, T.MUTED, max_width=pw)
         if app.dropdown_open:
             app.dropdown_rect = pygame.Rect(x, y + 114, pw, 4 * 44 + 16)
-            pygame.draw.rect(screen, T.PANEL, app.dropdown_rect, border_radius=8)
+            dd_rect = app.dropdown_rect.clamp(screen.get_rect())
+            draw_frosted_glass_panel(screen, dd_rect, style, border_radius=12)
             app.buttons = [b for b in app.buttons if not b.rect.colliderect(app.dropdown_rect)]
             for i, (key, title) in enumerate((('BFS', 'BFS'), ('IDS', 'IDS'), ('UCS', 'UCS'), ('ASTAR', 'A*'))):
                 button('algorithm:' + key, title, x + 8, y + 122 + i * 44, pw - 16,
