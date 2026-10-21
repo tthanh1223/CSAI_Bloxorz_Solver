@@ -40,6 +40,30 @@ ORIGINAL_DISTANCE = 2.5   # distance from the board centre, in board sizes (smal
 ORIGINAL_HEIGHT = 1.0     # one block unit of height, in tile widths
 
 
+# Floor tiles are separate chunky slabs (see _build_static).
+TILE_GAP = .03            # inset on each side, so neighbouring slabs show a seam
+TILE_BEVEL = .035         # rounded top edge
+TILE_THICKNESS = {'iso': .5, 'original': .55}  # in block units
+
+# One key light for floor and block, from the front-left and above, as a unit
+# vector in (row, col, z): top faces brightest, the front-left side medium,
+# the right side in shade, so every slab and the block read as solid 3D.
+_LIGHT = (.35, -.55, 1.0)
+LIGHT = tuple(v / sum(w * w for w in _LIGHT) ** .5 for v in _LIGHT)
+
+
+# Switches are raised push buttons: (base colour, height in block units).
+SWITCH_BUTTONS = {
+    'O':  ((158, 170, 194), .11),  # soft switch: round pale slate button
+    'X':  ((222, 140, 122), .12),  # heavy switch: soft coral cross
+    '<>': ((136, 174, 218), .11),  # split switch: round pale blue button
+}
+
+
+def tile_thickness(view: str) -> float:
+    return TILE_THICKNESS.get(view, .3)
+
+
 def height_scale(view: str) -> float:
     return ORIGINAL_HEIGHT if view == 'original' else HEIGHT_SCALE
 
@@ -405,6 +429,7 @@ class IsometricRenderer:
         self._bridge_tile_sprites = {}
         self._landing_bursts = []
         self._last_landing_id = None
+        self.pixel_scale = 1
 
     def set_stage(self, stage: StageData) -> None:
         self.stage = stage
@@ -444,7 +469,8 @@ class IsometricRenderer:
                       for z in (-.45, 2.2)]  # tile side .. standing block
             xs = [p[0] for p in points];ys = [p[1] for p in points]
             focal = min(size[0] * .88 / (max(xs) - min(xs)), size[1] * .88 / (max(ys) - min(ys)))
-            focal = max(2 * distance, min(112 * distance, focal))  # tile width 2..112 px at the centre
+            cap = 112 * self.pixel_scale  # tile width 2..112 logical px at the centre
+            focal = max(2 * distance, min(cap * distance, focal))
             origin = (size[0] / 2 - (min(xs) + max(xs)) * focal / 2,
                       size[1] / 2 - (min(ys) + max(ys)) * focal / 2)
             width = focal / distance  # tile width at the board centre, for markers and moss
@@ -452,7 +478,7 @@ class IsometricRenderer:
             return
         xs = [(c - r + delta) / 2 for r, c in cells for delta in (-1, 1)]
         ys = [(r + c) / 4 + delta for r, c in cells for delta in (-1.38, .68)]
-        width = max(2, min(112, size[0] * .88 / (max(xs) - min(xs)),
+        width = max(2, min(112 * self.pixel_scale, size[0] * .88 / (max(xs) - min(xs)),
                             size[1] * .88 / (max(ys) - min(ys))))
         origin = (size[0] / 2 - (min(xs) + max(xs)) * width / 2,
                   size[1] / 2 - (min(ys) + max(ys)) * width / 2)
@@ -485,25 +511,23 @@ class IsometricRenderer:
             normal = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
             length = max(1e-9, sum(n*n for n in normal) ** .5)
             top=abs(normal[2])/length
-            shade = .73 + .27 * top + .09 * abs(normal[0])/length
-            shaded=tuple(min(255,int(x*shade)) for x in color)
+            # Inward mesh winding -> outward normal, lit by LIGHT.
+            nx,ny,nz=(-value/length for value in normal)
+            diffuse=max(0.,nx*LIGHT[0]+ny*LIGHT[1]+nz*LIGHT[2])
             if player:
-                # Inward mesh winding -> outward normal. Fixed soft key light:
-                # upper face brightest, front medium, opposite side darker.
-                nx,ny,nz=(-value/length for value in normal)
-                diffuse=max(0.,nx*.39-ny*.20+nz*.90)
+                # Upper face brightest, front-left side medium, right side in shade.
                 hemisphere=max(0.,nz)
                 bevel_light=min(1.,4*abs(nz)*(abs(nx)+abs(ny)))
-                strength=.66+.32*diffuse+.06*hemisphere+.045*bevel_light
+                strength=.4+.62*diffuse+.05*hemisphere+.06*bevel_light
                 cream=(13,16,21)
                 shaded=tuple(max(0,min(255,round(v*strength+cream[k]*hemisphere))) for k,v in enumerate(color))
-            elif top<.4:
-                if color[0]>color[1]*1.12:
-                    shade=.67+.26*abs(normal[0])/length
-                    shaded=tuple(min(255,int(x*shade)) for x in color)
-                else:
+            else:
+                # Same three clear tones on every floor slab.
+                strength=.42+.6*diffuse
+                shaded=tuple(min(255,int(x*strength)) for x in color)
+                if top<.4 and color[0]<=color[1]*1.12:
                     tint=(154,143,126) if self.style=='blueprint' else (91,105,81) if self.style=='forest' else (161,132,163)
-                    shaded=tuple(int(a*.82+b*.18) for a,b in zip(shaded,tint))
+                    shaded=tuple(int(a*.88+b*.12) for a,b in zip(shaded,tint))
             result.append((depth, projected, shaded, outline))
         return result
 
@@ -581,9 +605,9 @@ class IsometricRenderer:
             for c,tile in enumerate(row):
                 coord=(r,c);bridge=self.bridge_cells.get(coord)
                 if bridge is not None:
+                    # A closed bridge is not drawn at all, so the player cannot see it coming.
                     if bridge in changing_bridges or bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
-                        pts=[self.project(p) for p in cuboid(r,c,-.12,1,1,0)[:4]]
-                        commands.append((self.camera.depth(r+.5,c+.5,0),'outline',pts));continue
+                        continue
                     # Open resting bridge tile: styled identically to the player block cuboid
                     top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
                     tile_outlines.append(top)
@@ -597,7 +621,8 @@ class IsometricRenderer:
                     if label:commands.append((self.camera.depth(r+.5,c+.5,0)+.001,'marker',((r+.5,c+.5,.01),label)))
                     continue
                 elif tile==TileType.VOID or coord==broken:continue
-                top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
+                g,thick=TILE_GAP,tile_thickness(self.camera.view)
+                top=[self.project(p) for p in cuboid(r+g,c+g,0,1-2*g,1-2*g,0)[:4]]
                 tile_outlines.append(top)
                 pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
                 color=(178,200,193) if self.high_contrast else self.FLOOR
@@ -690,7 +715,6 @@ class IsometricRenderer:
                 self._tile_sprites.append((tile_depth, tile_surf, (min_x, min_y), (r, c), delay, theta_base, radius_base))
 
         self._tile_sprites.sort(key=lambda it: it[0])
-
         # Retain a bounded number of full-size buffers, never one per state.
         self._frame=pygame.Surface(self.size,pygame.SRCALPHA)
         self._frame_key=None
@@ -761,7 +785,6 @@ class IsometricRenderer:
                 half.append(point)
             halves.extend(half[:-1])
         return halves
-
     def _block_face(self, surface, points, color, cut=None):
         pts = [(round(x), round(y)) for x, y in points]
         if not self._can_texture(surface, pts):
@@ -1607,7 +1630,6 @@ class IsometricRenderer:
         if self.style == 'forest' and getattr(self, 'stone_texture', None) is not None:
             self._stone_material(surface, points, color)
             return
-
         if self.style == 'dream':
             a, b, _, d = points
             warm = color[0] > color[1] * 1.12

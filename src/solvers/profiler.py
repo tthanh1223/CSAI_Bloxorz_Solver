@@ -8,13 +8,25 @@ from src.contract import SolverResult
 def run_with_profiler(
     solve_func: Callable[[], Tuple[bool, List[str], int, float]],
 ) -> SolverResult:
-    """Run a solver callback and collect elapsed time and peak memory."""
-    tracemalloc.start()
+    """Run a solver callback and collect elapsed time and peak memory.
+
+    The search runs twice:
+      1) timed run, WITHOUT tracemalloc: tracemalloc records every allocation and
+         makes Python search code about 4-5x slower, which would inflate the time;
+      2) memory run, WITH tracemalloc, to measure the peak memory.
+    The search is deterministic, so both runs expand exactly the same nodes.
+    Path, expanded nodes and cost come from the timed run.
+    """
     start_time = time.perf_counter()
     found, path, expanded_nodes, total_cost = solve_func()
-    end_time = time.perf_counter()
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
+    elapsed = time.perf_counter() - start_time
+
+    tracemalloc.start()
+    try:
+        solve_func()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
 
     return SolverResult(
         found=found,
@@ -22,6 +34,6 @@ def run_with_profiler(
         solution_length=len(path),
         total_cost=total_cost,
         expanded_nodes=expanded_nodes,
-        time_sec=end_time - start_time,
+        time_sec=elapsed,
         peak_memory_mb=peak / (1024 * 1024),
     )

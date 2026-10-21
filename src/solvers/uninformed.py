@@ -42,7 +42,7 @@ class BFS(SearchSolver):
                             g=node.g + cost,
                         )
                         frontier.append(child)
-            return False, [], 0, 0.0
+            return False, [], expanded_nodes, 0.0
         return run_with_profiler(_bfs)
 
 class DFS(SearchSolver):
@@ -51,10 +51,14 @@ class DFS(SearchSolver):
             expanded_nodes = 0
             depth_limit = 0
             while True:
-                found, path, exp, cost = _dfs(problem, depth_limit)
+                found, path, exp, cost, cutoff = _dfs(problem, depth_limit)
                 expanded_nodes += exp
                 if found:
                     return True, path, expanded_nodes, cost
+                if not cutoff:
+                    # No branch was stopped by the depth limit: every path has
+                    # been explored completely, so a deeper limit cannot help.
+                    return False, [], expanded_nodes, 0.0
                 depth_limit += 1
         def _dfs(problem, max_depth):
             start_node = SearchNode(
@@ -65,12 +69,15 @@ class DFS(SearchSolver):
             )
             stack = [(start_node, frozenset([start_node.state]))]
             expanded_nodes = 0
+            cutoff = False  # True if some node was not expanded because of max_depth
             while stack:
                 node, path_states = stack.pop()
                 expanded_nodes += 1
                 if problem.is_goal(node.state):
-                    return True, save_path(node), expanded_nodes, float(node.g)
-                if node.g < max_depth:
+                    return True, save_path(node), expanded_nodes, float(node.g), cutoff
+                if node.g >= max_depth:
+                    cutoff = True
+                else:
                     for action, next_state, cost in problem.get_successors(node.state):
                         if next_state not in path_states:
                             child = SearchNode(
@@ -80,7 +87,7 @@ class DFS(SearchSolver):
                                 g=node.g + cost,
                             )
                             stack.append((child, path_states | {next_state}))
-            return False, [], expanded_nodes, 0.0
+            return False, [], expanded_nodes, 0.0, cutoff
         return run_with_profiler(_ids)
 
 import heapq
@@ -141,6 +148,6 @@ class UCS(SearchSolver):
                         )
                         heapq.heappush(heap, (new_g, counter, child))
                         
-            return False, [], 0, 0.0
+            return False, [], expanded_nodes, 0.0
             
         return run_with_profiler(_ucs)

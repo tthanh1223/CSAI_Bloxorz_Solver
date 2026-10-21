@@ -56,3 +56,21 @@ def test_session_fall_sets_lost_and_keeps_state():
     assert session.apply_action(Action.RIGHT) is False
     session.restart()
     assert session.status == 'PLAYING'
+
+
+def test_parked_split_cube_does_not_retrigger_soft_switch():
+    """Stage 02 has a soft toggle switch at (2, 2). A split cube resting on it
+    must not toggle the bridge again every time the other cube moves."""
+    from pathlib import Path
+    from src.engine.loader import load_stage
+    from src.engine.state import Action
+    stage = load_stage(str(Path(__file__).resolve().parents[1] / 'levels' / 'stage_02.json'))
+    problem = BloxorzProblem(stage, None)
+    parked = GameState((2, 2), (0, 6), Orientation.SPLIT, 1, stage.initial_bridge_mask)
+    for action, after, _ in problem.get_successors(parked):
+        if action != Action.SPACE and after.orientation == Orientation.SPLIT:
+            assert after.bridges_status == parked.bridges_status
+    # Moving a cube ONTO the switch still toggles it.
+    arriving = GameState((2, 3), (0, 6), Orientation.SPLIT, 0, stage.initial_bridge_mask)
+    moved = {a: s for a, s, _ in problem.get_successors(arriving)}[Action.LEFT]
+    assert moved.pos1 == (2, 2) and moved.bridges_status != arriving.bridges_status

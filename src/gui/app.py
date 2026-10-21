@@ -12,7 +12,7 @@ from src.gui.renderer3d import IsometricRenderer, VIEWS
 from src.gui.solver_gateway import ProcessSolverGateway
 from src.gui.contracts import SolverRequest, SolverStatus, ReplayStatus
 from src.gui import theme
-from src.gui.presentation import draw as draw_presentation
+from src.gui.presentation import draw as draw_presentation, sharp_board
 
 ROOT = Path(__file__).resolve().parents[2]
 SAVE_PATH = ROOT / 'data' / 'gui_session.json'
@@ -93,7 +93,10 @@ class BloxorzApp:
         self.modal_rect = pygame.Rect(0, 0, 0, 0)
         self.dropdown_rect = pygame.Rect(0, 0, 0, 0)
         self.message = 'Roll with arrows or WASD. Reach G standing upright.'
-        self.screen = None
+        self.screen = None  # logical (1x) frame the UI is laid out on
+        self.window = None  # run(): HiDPI window; its surface may be 2x the screen
+        self.hidpi = 1
+        self._hi_base = self._hi_board = None
         self.buttons = []
         self.seek_rect = pygame.Rect(0, 0, 0, 0)
         self.board_rect = pygame.Rect(0, 0, 1, 1)
@@ -660,9 +663,40 @@ class BloxorzApp:
     def draw(self):
         return draw_presentation(self)
 
+    def present(self):
+        """Show the last drawn frame in the window.
+
+        A Retina window has 2x the pixels of the logical screen. The UI frame
+        is scaled up to fill it, and the board is drawn on top at the full
+        resolution, so tiles and block are sharp instead of blurred by the OS.
+        """
+        hi = self.window.get_surface()
+        if hi.get_size() == self.screen.get_size():
+            hi.blit(self.screen, (0, 0))
+        elif not sharp_board(self):
+            pygame.transform.smoothscale(self.screen, hi.get_size(), hi)
+        else:
+            ui = self._presentation_cache[2]
+            if self._hi_base is None or self._hi_base[0] is not ui or self._hi_base[1].get_size() != hi.get_size():
+                self._hi_base = (ui, pygame.transform.smoothscale(ui, hi.get_size()))
+            hi.blit(self._hi_base[1], (0, 0))
+            scale = hi.get_width() / self.screen.get_width()
+            rect = pygame.Rect(round(self.board_rect.x * scale), round(self.board_rect.y * scale),
+                               round(self.board_rect.w * scale), round(self.board_rect.h * scale))
+            if self._hi_board is None or self._hi_board.get_size() != rect.size:
+                self._hi_board = pygame.Surface(rect.size, pygame.SRCALPHA)
+            self.renderer.zoom, self.renderer.pan = self.zoom, (self.pan[0] * scale, self.pan[1] * scale)
+            self.renderer.pixel_scale = scale
+            self.renderer.draw(self._hi_board, self.session.current_state, self.animation.frame)
+            hi.blit(self._hi_board, rect)
+        self.window.flip()
+
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
             self.handle_key(event.key)
+        elif event.type in (pygame.WINDOWSIZECHANGED, pygame.VIDEORESIZE) and self.window is not None:
+            self.screen = pygame.Surface(self.window.size)
+            self._presentation_cache = self._hi_base = None
         elif event.type == pygame.VIDEORESIZE:
             self.screen = pygame.display.set_mode((max(theme.MIN_SIZE[0], event.w), max(theme.MIN_SIZE[1], event.h)), pygame.RESIZABLE)
         elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -714,14 +748,11 @@ class BloxorzApp:
     def run(self):
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
-        # Responsive window sizing: adapt to screen height so UI never overflows below taskbar
-        info = pygame.display.Info()
-        sw = info.current_w or 1280
-        sh = info.current_h or 720
-        target_w = min(self.WINDOW_SIZE[0], max(theme.MIN_SIZE[0], sw - 40))
-        target_h = min(self.WINDOW_SIZE[1], max(theme.MIN_SIZE[1], sh - 80))
-        self.screen = pygame.display.set_mode((target_w, target_h), pygame.RESIZABLE)
-        pygame.display.set_caption('Bloxorz 3D - Search Lab')
+        # allow_high_dpi: on Retina screens the window surface gets 2x pixels (see present()).
+        self.window = pygame.Window('Bloxorz 3D - Search Lab', self.WINDOW_SIZE, resizable=True, allow_high_dpi=True)
+        self.window.minimum_size = theme.MIN_SIZE
+        self.screen = pygame.Surface(self.window.size)
+        self.hidpi = self.window.get_surface().get_width() / self.window.size[0]
         self.font = pygame.font.Font(None, 28)
         self.title_font = pygame.font.Font(None, 38)
         if pygame.mixer.get_init():
@@ -737,20 +768,22 @@ class BloxorzApp:
                     pygame.mixer.music.play(-1)
                 except Exception:
                     pass
-
+        else:
+            self.sound_enabled = False  # no audio device: Settings should say Off
         clock = pygame.time.Clock()
         try:
             running = True
             while running:
                 dt = min(clock.tick(60) / 1000, 0.1)
                 for event in pygame.event.get():
-                    if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open)):
+                    if event.type in (pygame.QUIT, pygame.WINDOWCLOSE) or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open
+                                                                                                                or self.win_phase == 'choice')):
                         running = False
                     else:
                         self.handle_event(event)
                 self.update(dt)
                 if self.draw():
-                    pygame.display.flip()
+                    self.present()
         finally:
             self.gateway.close()
             if hasattr(self.renderer, 'close'):

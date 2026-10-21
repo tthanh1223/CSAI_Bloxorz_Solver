@@ -30,9 +30,15 @@ def apply_tile_effects(
     blocks: List[Coord], 
     is_split: bool, 
     current_bridges_status: Tuple[bool, ...], 
-    stage_data: StageData
+    stage_data: StageData,
+    pressed: List[Coord] | None = None,
 ) -> Tuple[List[Coord], bool, Tuple[bool, ...]]:
-    """Mục tiêu cảu hàm này như kiểu một bộ lọc á, kiểm tra các ô mà khối gỗ đang đè lên có công tắc hay không, nếu có thì thực hiện hiệu ứng của công tắc đó."""
+    """Mục tiêu cảu hàm này như kiểu một bộ lọc á, kiểm tra các ô mà khối gỗ đang đè lên có công tắc hay không, nếu có thì thực hiện hiệu ứng của công tắc đó.
+
+    pressed: các ô khối VỪA đè lên ở nước đi này (mặc định: mọi ô của `blocks`).
+    Switch chỉ kích hoạt khi bị đè xuống, nên khi khối bị tách, khối nhỏ đang
+    đứng yên trên switch không được kích hoạt lại mỗi lần khối kia di chuyển.
+    """
     new_bridges_status = list(current_bridges_status)
     new_blocks = list(blocks)
     new_is_split = is_split
@@ -43,7 +49,7 @@ def apply_tile_effects(
         len(blocks) == 1 or (len(blocks) == 2 and blocks[0] == blocks[1])
     )
 
-    for row, col in dict.fromkeys(blocks):
+    for row, col in dict.fromkeys(blocks if pressed is None else pressed):
         if (row, col) not in stage_data.switches:
             continue
             
