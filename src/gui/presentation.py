@@ -28,16 +28,20 @@ def draw(app):
     """Cache the composed UI independently of the animated board."""
     mouse = pygame.mouse.get_pos()
     hovered = tuple(b.key for b in app.buttons if b.enabled and b.rect.collidepoint(mouse))
+    hovered_metrics = tuple(i for i, r in enumerate(getattr(app, 'metric_rects', [])) if r.collidepoint(mouse))
+    animating_ui = bool(hovered) or bool(hovered_metrics) or app.busy or getattr(app, 'active_slider', None) is not None
+    time_tick = (pygame.time.get_ticks() // 16) if animating_ui else 0
+    slider_state = (getattr(app, 'bgm_volume', 0.35), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
     ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), app.large_text, app.high_contrast,
               app.stage_index, app.session.moves, app.session.status, app.busy, app.animation.busy,
               app.replay.status, app.replay.index, app.replay.length, app.speed, app.message,
               app.algorithm, app.solve_current, id(app.result), app.details_open, app.solver_status,
               app.stage_picker, app.picker_page, app.menu, app.dropdown_open, app.sound_enabled, app.animate,
-              bool(app.actions), hovered, pygame.mouse.get_pressed(),
-              pygame.time.get_ticks() // 100 if app.busy else 0)
-    board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan))
-    cached = getattr(app, '_presentation_cache', None)
+              bool(app.actions), hovered, hovered_metrics, pygame.mouse.get_pressed(), slider_state,
+              time_tick)
     animating_board = getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
+    board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan), animating_board)
+    cached = getattr(app, '_presentation_cache', None)
     if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
         if not animating_board and cached[1] == board_key:
             return False
@@ -118,9 +122,29 @@ def _draw(app):
         pygame.draw.rect(panel, border_col, panel.get_rect(), 1, border_radius=22)
     screen.blit(panel, (panel_x - 16, 76))
 
-    # Quiet, single-line navigation
-    label('B L O X O R Z', 32, 18, f=heading)
-    label(f'{app.session.moves} MOVES', 34, 48, (215, 230, 225) if forest or style == 'blueprint' else T.MUTED, f=caption)
+    # High-contrast frosted glass container badge for logo & move counter
+    badge_rect = pygame.Rect(20, 10, 192, 58)
+    badge = pygame.Surface(badge_rect.size, pygame.SRCALPHA)
+    if style == 'blueprint':
+        pygame.draw.rect(badge, (12, 32, 52, 230), badge.get_rect(), border_radius=16)
+        pygame.draw.rect(badge, (56, 142, 185, 190), badge.get_rect(), 1, border_radius=16)
+        title_col = (245, 250, 255)
+        moves_col = (145, 210, 240)
+    elif forest:
+        pygame.draw.rect(badge, (16, 28, 20, 235), badge.get_rect(), border_radius=16)
+        pygame.draw.rect(badge, (76, 115, 86, 185), badge.get_rect(), 1, border_radius=16)
+        title_col = (250, 245, 235)
+        moves_col = (200, 225, 180)
+    else:  # dream city
+        pygame.draw.rect(badge, (255, 246, 250, 235), badge.get_rect(), border_radius=16)
+        pygame.draw.rect(badge, (228, 182, 198, 210), badge.get_rect(), 1, border_radius=16)
+        pygame.draw.line(badge, (255, 255, 255, 180), (16, 1), (badge_rect.w - 16, 1), 1)
+        title_col = (46, 32, 42)
+        moves_col = (112, 82, 98)
+    screen.blit(badge, badge_rect.topleft)
+
+    label('B L O X O R Z', badge_rect.x + 18, badge_rect.y + 7, title_col, f=heading)
+    label(f'{app.session.moves} MOVES', badge_rect.x + 20, badge_rect.y + 35, moves_col, f=caption)
     button('theme', {'dream': '01 / DREAM CITY', 'forest': '02 / FOREST RUINS',
                      'blueprint': '03 / PAPER BLUEPRINT', 'forest_gl': 'FOREST / OPENGL'}.get(style, style),
            316, 20, 268, style != 'forest_gl', kind='quiet')
@@ -217,37 +241,43 @@ def _draw(app):
         alg_label = {'ASTAR': 'A*'}.get(app.result.algorithm, app.result.algorithm)
         label(f'{m.time_sec:.3f} s  ·  {alg_label}', x, y + 80, T.MUTED, f=caption)
         button('solution', 'Watch solution', x, y + 116, pw, idle, 'primary')
-        button('details', ('−' if app.details_open else '+') + '  Result details', x, y + 166, pw, kind='quiet')
+        button('details', ('−' if app.details_open else '+') + '  Result details', x, y + 166, pw, selected=app.details_open)
         offset = y + 214
         if app.details_open:
-            # 2x2 Bento Metrics Grid
+            # 2x2 Bento Metrics Grid with interactive hover elevation and luminous glow
             bw = (pw - 8) // 2
             bh = 46
-            b1 = pygame.Rect(x, offset, bw, bh)
-            pygame.draw.rect(screen, T.SURFACE, b1, border_radius=8)
-            pygame.draw.rect(screen, T.LINE, b1, 1, border_radius=8)
-            label('TIME', b1.x + 8, b1.y + 6, T.MUTED, f=caption)
-            label(f'{m.time_sec:.3f} s', b1.x + 8, b1.y + 22, T.TEXT, f=mono)
+            mouse = pygame.mouse.get_pos()
+            cards = [
+                (pygame.Rect(x, offset, bw, bh), 'TIME', f'{m.time_sec:.3f} s'),
+                (pygame.Rect(x + bw + 8, offset, bw, bh), 'RAM', f'{m.peak_memory_mb:.2f} MB'),
+                (pygame.Rect(x, offset + bh + 8, bw, bh), 'EXPANDED', f'{m.expanded_nodes}'),
+                (pygame.Rect(x + bw + 8, offset + bh + 8, bw, bh), 'COST', f'{m.total_cost:g}'),
+            ]
+            app.metric_rects = [base_rect for base_rect, _, _ in cards]
+            for base_rect, tag, val in cards:
+                card_hover = base_rect.collidepoint(mouse)
+                draw_b = base_rect.move(0, -2) if card_hover else base_rect
+                card_surf = pygame.Surface(draw_b.size, pygame.SRCALPHA)
+                if card_hover:
+                    shadow = pygame.Surface((draw_b.w + 6, draw_b.h + 6), pygame.SRCALPHA)
+                    pygame.draw.rect(shadow, (0, 0, 0, 40), shadow.get_rect(), border_radius=10)
+                    screen.blit(shadow, (draw_b.x - 3, draw_b.y + 1))
 
-            b2 = pygame.Rect(x + bw + 8, offset, bw, bh)
-            pygame.draw.rect(screen, T.SURFACE, b2, border_radius=8)
-            pygame.draw.rect(screen, T.LINE, b2, 1, border_radius=8)
-            label('RAM', b2.x + 8, b2.y + 6, T.MUTED, f=caption)
-            label(f'{m.peak_memory_mb:.2f} MB', b2.x + 8, b2.y + 22, T.TEXT, f=mono)
-
-            b3 = pygame.Rect(x, offset + bh + 8, bw, bh)
-            pygame.draw.rect(screen, T.SURFACE, b3, border_radius=8)
-            pygame.draw.rect(screen, T.LINE, b3, 1, border_radius=8)
-            label('EXPANDED', b3.x + 8, b3.y + 6, T.MUTED, f=caption)
-            label(f'{m.expanded_nodes}', b3.x + 8, b3.y + 22, T.TEXT, f=mono)
-
-            b4 = pygame.Rect(x + bw + 8, offset + bh + 8, bw, bh)
-            pygame.draw.rect(screen, T.SURFACE, b4, border_radius=8)
-            pygame.draw.rect(screen, T.LINE, b4, 1, border_radius=8)
-            label('COST', b4.x + 8, b4.y + 6, T.MUTED, f=caption)
-            label(f'{m.total_cost:g}', b4.x + 8, b4.y + 22, T.TEXT, f=mono)
+                    bg_col = (*T.HOVER[:3], 240) if len(T.HOVER) == 3 else T.HOVER
+                    pygame.draw.rect(card_surf, bg_col, card_surf.get_rect(), border_radius=8)
+                    pygame.draw.rect(card_surf, (*T.ACCENT[:3], 210), card_surf.get_rect(), 1, border_radius=8)
+                    pygame.draw.line(card_surf, (255, 255, 255, 90), (8, 1), (draw_b.w - 8, 1), 1)
+                else:
+                    pygame.draw.rect(card_surf, T.SURFACE, card_surf.get_rect(), border_radius=8)
+                    pygame.draw.rect(card_surf, T.LINE, card_surf.get_rect(), 1, border_radius=8)
+                screen.blit(card_surf, draw_b)
+                label(tag, draw_b.x + 8, draw_b.y + 6, T.ACCENT if card_hover else T.MUTED, f=caption)
+                label(val, draw_b.x + 8, draw_b.y + 22, tuple(min(255, c + 35) for c in T.TEXT) if card_hover else T.TEXT, f=mono)
 
             offset += (bh * 2 + 16)
+        else:
+            app.metric_rects = []
         button('new_search', 'Try another algorithm', x, offset + 12, pw, idle, 'quiet')
     else:
         label('S O L V E R', x + 8, y - 8, f=heading)
@@ -299,7 +329,7 @@ def _draw(app):
         app.buttons = []
         app.seek_rect = pygame.Rect(0, 0, 0, 0)
         mw = 608 if app.stage_picker else 480
-        mh = 464 if app.stage_picker else 536 if app.menu == 'settings' else 432
+        mh = 464 if app.stage_picker else 580 if app.menu == 'settings' else 432
         app.modal_rect = pygame.Rect((w - mw) // 2, (h - mh) // 2, mw, mh)
         r = app.modal_rect
         pygame.draw.rect(screen, T.PANEL, r, border_radius=16)
@@ -315,18 +345,63 @@ def _draw(app):
             button('page_next', 'Next', r.right - 184, r.bottom - 64, 152,
                    (app.picker_page + 1) * 20 < len(app.stage_paths), 'quiet')
         elif app.menu == 'settings':
-            xx, yy = r.x + 32, r.y + 88
-            button('save', 'Save session · F5', xx, yy, 200, idle)
-            button('load', 'Load session · F9', xx + 216, yy, 200)
-            for i, (key, title, enabled) in enumerate((('sound', 'Sound', app.sound_enabled),
-                    ('animate', 'Animation', app.animate), ('contrast', 'Contrast', app.high_contrast),
+            xx, yy = r.x + 32, r.y + 76
+            button('save', 'Save session · F5', xx, yy, 196, idle)
+            button('load', 'Load session · F9', xx + 212, yy, 196)
+
+            # Master Sound Toggle
+            label('Master Sound', xx, yy + 58)
+            button('sound', 'On' if app.sound_enabled else 'Off', r.right - 120, yy + 50, 88, selected=app.sound_enabled)
+
+            # BGM Volume Slider
+            mouse = pygame.mouse.get_pos()
+            slider_w = 175
+            track_x = xx + 130
+            bgm_y = yy + 102
+            app.bgm_slider_rect = pygame.Rect(track_x, bgm_y - 8, slider_w, 20)
+            label('Music (BGM)', xx, bgm_y - 8)
+            pygame.draw.line(screen, T.LINE, (track_x, bgm_y), (track_x + slider_w, bgm_y), 4)
+            bgm_fill_w = int(slider_w * app.bgm_volume)
+            if bgm_fill_w > 0:
+                pygame.draw.line(screen, T.ACCENT, (track_x, bgm_y), (track_x + bgm_fill_w, bgm_y), 4)
+            knob_x = track_x + bgm_fill_w
+            bgm_hover = app.bgm_slider_rect.inflate(0, 12).collidepoint(mouse) or app.active_slider == 'bgm'
+            if bgm_hover:
+                pygame.draw.circle(screen, (*T.ACCENT[:3], 80), (knob_x, bgm_y), 11)
+            pygame.draw.circle(screen, T.ACCENT, (knob_x, bgm_y), 7 if not bgm_hover else 8)
+            pygame.draw.circle(screen, (255, 255, 255), (knob_x, bgm_y), 3)
+            label(f'{int(app.bgm_volume * 100)}%', track_x + slider_w + 14, bgm_y - 8, T.MUTED, f=mono)
+
+            # SFX Volume Slider
+            sfx_y = yy + 138
+            app.sfx_slider_rect = pygame.Rect(track_x, sfx_y - 8, slider_w, 20)
+            label('Sound FX', xx, sfx_y - 8)
+            pygame.draw.line(screen, T.LINE, (track_x, sfx_y), (track_x + slider_w, sfx_y), 4)
+            sfx_fill_w = int(slider_w * app.sfx_volume)
+            if sfx_fill_w > 0:
+                pygame.draw.line(screen, T.ACCENT, (track_x, sfx_y), (track_x + sfx_fill_w, sfx_y), 4)
+            knob_sfx_x = track_x + sfx_fill_w
+            sfx_hover = app.sfx_slider_rect.inflate(0, 12).collidepoint(mouse) or app.active_slider == 'sfx'
+            if sfx_hover:
+                pygame.draw.circle(screen, (*T.ACCENT[:3], 80), (knob_sfx_x, sfx_y), 11)
+            pygame.draw.circle(screen, T.ACCENT, (knob_sfx_x, sfx_y), 7 if not sfx_hover else 8)
+            pygame.draw.circle(screen, (255, 255, 255), (knob_sfx_x, sfx_y), 3)
+            label(f'{int(app.sfx_volume * 100)}%', track_x + slider_w + 14, sfx_y - 8, T.MUTED, f=mono)
+
+            # Separator line
+            pygame.draw.line(screen, T.LINE, (xx, yy + 172), (r.right - 32, yy + 172), 1)
+
+            for i, (key, title, enabled) in enumerate((
+                    ('animate', 'Animation', app.animate),
+                    ('contrast', 'Contrast', app.high_contrast),
                     ('text', 'Large text', app.large_text))):
-                label(title, xx, yy + 72 + i * 48)
-                button(key, 'On' if enabled else 'Off', r.right - 120, yy + 64 + i * 48, 88, selected=enabled)
+                label(title, xx, yy + 192 + i * 44)
+                button(key, 'On' if enabled else 'Off', r.right - 120, yy + 184 + i * 44, 88, selected=enabled)
+
             view_label = 'View: Original' if app.renderer.view == 'original' else 'View: Classic'
-            button('view', view_label + ' · V', xx, r.bottom - 120, 200, kind='quiet')
-            button('camera', 'Reset camera', xx + 216, r.bottom - 120, 200, kind='quiet')
-            button('recording', 'Replay my moves', xx, r.bottom - 64, 416, idle and bool(app.actions), 'quiet')
+            button('view', view_label + ' · V', xx, r.bottom - 110, 196, kind='quiet')
+            button('camera', 'Reset camera', xx + 212, r.bottom - 110, 196, kind='quiet')
+            button('recording', 'Replay my moves', xx, r.bottom - 58, 408, idle and bool(app.actions), 'quiet')
         else:
             lines = ['Stand the block upright in the dark goal.', 'Arrows / WASD: roll · Space: switch cube',
                      'Z: undo · R: restart · Esc: close menu', 'Scroll: zoom · Right-drag: pan the camera',

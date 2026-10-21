@@ -74,6 +74,11 @@ class BloxorzApp:
         self.wait = 0.0
         self.animate = True
         self.sound_enabled = True  # on by default; Settings > Sound turns it off
+        self.bgm_volume: float = 0.35
+        self.sfx_volume: float = 0.85
+        self.active_slider: str | None = None
+        self.bgm_slider_rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
+        self.sfx_slider_rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
         self.high_contrast = False
         self.large_text = False
         self.sound = None
@@ -103,6 +108,23 @@ class BloxorzApp:
     @property
     def busy(self):
         return self.active_request is not None
+
+    def set_bgm_volume(self, vol: float):
+        self.bgm_volume = max(0.0, min(1.0, vol))
+        if vol > 0.0:
+            self.sound_enabled = True
+        if pygame.mixer.get_init():
+            try:
+                pygame.mixer.music.set_volume(self.bgm_volume if self.sound_enabled else 0.0)
+            except Exception:
+                pass
+
+    def set_sfx_volume(self, vol: float):
+        self.sfx_volume = max(0.0, min(1.0, vol))
+        if vol > 0.0:
+            self.sound_enabled = True
+        if self.sound:
+            self.sound.set_volume(self.sfx_volume if self.sound_enabled else 0.0)
 
     def invalidate(self):
         self.pending_action = None
@@ -438,6 +460,7 @@ class BloxorzApp:
             self.intro_t += dt / 0.85
             if self.intro_t >= 1.0:
                 self.intro_t = None
+                self._presentation_cache = None
         if self.win_phase == 'disassemble' and self.outro_t is not None:
             self.outro_t += dt / 0.50
             if self.outro_t >= 1.0:
@@ -596,11 +619,16 @@ class BloxorzApp:
                     if self.sound_enabled:
                         try:
                             pygame.mixer.music.unpause()
+                            pygame.mixer.music.set_volume(self.bgm_volume)
+                            if self.sound:
+                                self.sound.set_volume(self.sfx_volume)
                         except Exception:
                             pass
                     else:
                         try:
                             pygame.mixer.music.pause()
+                            if self.sound:
+                                self.sound.set_volume(0.0)
                         except Exception:
                             pass
 
@@ -617,6 +645,17 @@ class BloxorzApp:
             self.screen = pygame.display.set_mode((max(theme.MIN_SIZE[0], event.w), max(theme.MIN_SIZE[1], event.h)), pygame.RESIZABLE)
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
+                if self.menu == 'settings':
+                    if self.bgm_slider_rect.inflate(0, 16).collidepoint(event.pos):
+                        self.active_slider = 'bgm'
+                        t = max(0.0, min(1.0, (event.pos[0] - self.bgm_slider_rect.x) / max(1, self.bgm_slider_rect.w)))
+                        self.set_bgm_volume(t)
+                        return
+                    if self.sfx_slider_rect.inflate(0, 16).collidepoint(event.pos):
+                        self.active_slider = 'sfx'
+                        t = max(0.0, min(1.0, (event.pos[0] - self.sfx_slider_rect.x) / max(1, self.sfx_slider_rect.w)))
+                        self.set_sfx_volume(t)
+                        return
                 for button in reversed(self.buttons):
                     if button.enabled and button.rect.collidepoint(event.pos):
                         self.command(button.key)
@@ -632,11 +671,21 @@ class BloxorzApp:
                     self.seek(round((event.pos[0] - self.seek_rect.x) / self.seek_rect.width * self.replay.length))
             elif event.button == 3 and self.board_rect.collidepoint(event.pos) and not (self.stage_picker or self.menu or self.dropdown_open):
                 self.dragging = True
-        elif event.type == pygame.MOUSEBUTTONUP and event.button == 3:
-            self.dragging = False
-        elif event.type == pygame.MOUSEMOTION and self.dragging and not (self.stage_picker or self.menu):
-            self.pan[0] += event.rel[0]
-            self.pan[1] += event.rel[1]
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                self.active_slider = None
+            elif event.button == 3:
+                self.dragging = False
+        elif event.type == pygame.MOUSEMOTION:
+            if self.active_slider == 'bgm':
+                t = max(0.0, min(1.0, (event.pos[0] - self.bgm_slider_rect.x) / max(1, self.bgm_slider_rect.w)))
+                self.set_bgm_volume(t)
+            elif self.active_slider == 'sfx':
+                t = max(0.0, min(1.0, (event.pos[0] - self.sfx_slider_rect.x) / max(1, self.sfx_slider_rect.w)))
+                self.set_sfx_volume(t)
+            elif self.dragging and not (self.stage_picker or self.menu):
+                self.pan[0] += event.rel[0]
+                self.pan[1] += event.rel[1]
         elif event.type == pygame.MOUSEWHEEL and not (self.stage_picker or self.menu or self.dropdown_open) and self.board_rect.collidepoint(pygame.mouse.get_pos()):
             self.zoom = max(0.5, min(2.5, self.zoom + event.y * 0.1))
 
@@ -655,14 +704,14 @@ class BloxorzApp:
         self.title_font = pygame.font.Font(None, 38)
         if pygame.mixer.get_init():
             from src.gui.sfx import SoundBank
-            self.sound = SoundBank()
+            self.sound = SoundBank(volume=self.sfx_volume)
             bgm_path = ROOT / 'assets' / 'bgm' / 'the_mountain-retro-game-593063.mp3'
             if not bgm_path.exists():
                 bgm_path = ROOT / 'assets' / 'bgm' / 'cheerful_puzzle.wav'
             if bgm_path.exists():
                 try:
                     pygame.mixer.music.load(str(bgm_path))
-                    pygame.mixer.music.set_volume(0.32)
+                    pygame.mixer.music.set_volume(self.bgm_volume if self.sound_enabled else 0.0)
                     pygame.mixer.music.play(-1)
                 except Exception:
                     pass

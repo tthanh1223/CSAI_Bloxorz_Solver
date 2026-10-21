@@ -127,16 +127,30 @@ class Button:
         p_t = anim['press']
 
         # Physical translation: lift up smoothly on hover, depress down on click
-        dy = -round(h_t * 2.5) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
-        draw_rect = self.rect.move(0, dy)
+        # Breakthrough dynamic floating & swaying micro-animation on hover
+        ticks = pygame.time.get_ticks()
+        float_y = math.sin(ticks * 0.0065 + self.rect.x * 0.04) * 2.2
+        sway_x = math.sin(ticks * 0.0035 + self.rect.y * 0.04) * 1.0
+
+        dy = -round(h_t * 3.0 + float_y * h_t) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
+        dx = round(sway_x * h_t) if h_t > 0 else 0
+        draw_rect = self.rect.move(dx, dy)
+        radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
+
+        # Luminous ambient aura glow beneath button on hover
+        if self.enabled and h_t > 0.05:
+            glow_surf = pygame.Surface((draw_rect.width + 16, draw_rect.height + 16), pygame.SRCALPHA)
+            glow_alpha = int(42 * h_t) if self.kind == 'primary' else int(25 * h_t)
+            glow_col = (*theme.ACCENT[:3], glow_alpha)
+            pygame.draw.rect(glow_surf, glow_col, glow_surf.get_rect(), border_radius=radius + 6)
+            surface.blit(glow_surf, (draw_rect.x - 8, draw_rect.y - 8 + 2))
 
         # Soft dynamic drop shadow when lifted / enabled
         if self.enabled and self.kind != 'quiet':
-            shadow_offset = round(2.0 + h_t * 3.0 - p_t * 1.5)
-            shadow_rect = self.rect.move(0, shadow_offset)
+            shadow_offset = round(2.5 + h_t * 4.0 - p_t * 2.0)
+            shadow_rect = self.rect.move(dx, shadow_offset)
             shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
-            radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
-            pygame.draw.rect(shadow_surf, (0, 0, 0, int(20 + 45 * h_t)), shadow_surf.get_rect(), border_radius=radius)
+            pygame.draw.rect(shadow_surf, (0, 0, 0, int(22 + 55 * h_t)), shadow_surf.get_rect(), border_radius=radius)
             surface.blit(shadow_surf, shadow_rect)
 
         # Smooth color transitions
@@ -183,21 +197,20 @@ class Button:
                     if h_t < 0.02:
                         color = None
                     else:
-                        color = tuple((*color[:3], int(190 * h_t)))
+                        color = tuple((*theme.ACCENT[:3], int(28 * h_t)))
                 base_fg = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
                 bright_fg = theme.ACCENT if self.selected else (tuple(min(255, c + 40) for c in theme.TEXT) if self.enabled else theme.DISABLED)
                 foreground = lerp_color(base_fg, bright_fg, h_t)
 
         # Draw tactile background
         if color:
-            radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
             pygame.draw.rect(surface, color, draw_rect, border_radius=radius)
 
             if self.kind == 'primary' and self.enabled:
                 # Polished glass top shine highlight
                 gradient = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
                 for row in range(max(1, draw_rect.height // 2)):
-                    alpha = int(45 * (1.0 - row / (draw_rect.height / 2)))
+                    alpha = int((45 + 35 * h_t) * (1.0 - row / (draw_rect.height / 2)))
                     pygame.draw.line(gradient, (255, 255, 255, alpha), (0, row), (draw_rect.width, row))
                 mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
                 pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
@@ -211,6 +224,9 @@ class Button:
                     surface.blit(sheen, draw_rect)
                 border_color = lerp_color(theme.LINE, theme.ACCENT, h_t) if (self.enabled and h_t > 0) else theme.LINE
                 pygame.draw.rect(surface, border_color, draw_rect, 1, border_radius=radius)
+            elif self.kind == 'quiet' and h_t > 0.05:
+                quiet_border = (*theme.ACCENT[:3], int(150 * h_t))
+                pygame.draw.rect(surface, quiet_border, draw_rect, 1, border_radius=radius)
 
         if self.selected and self.kind != 'dock_item':
             pygame.draw.rect(surface, theme.ACCENT, draw_rect, 1, border_radius=12)

@@ -348,6 +348,7 @@ class IsometricRenderer:
         self._frame = pygame.Surface(self.size, pygame.SRCALPHA)
         self._base = pygame.Surface(self.size, pygame.SRCALPHA)
         self._top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
+        self._shadow_surf = None
         self._tile_sprites = []
 
     def set_stage(self, stage: StageData) -> None:
@@ -482,12 +483,15 @@ class IsometricRenderer:
         # Pass 1: Broad diffused ambient drop shadow (offset +14px down)
         tiny1 = pygame.transform.smoothscale(shadow_surf, (max(1, sw // 6), max(1, sh // 6)))
         soft1 = pygame.transform.smoothscale(tiny1, (sw, sh))
-        self._base.blit(soft1, (0, 14))
 
         # Pass 2: Closer contact drop shadow (offset +6px down)
         tiny2 = pygame.transform.smoothscale(shadow_surf, (max(1, sw // 3), max(1, sh // 3)))
         soft2 = pygame.transform.smoothscale(tiny2, (sw, sh))
-        self._base.blit(soft2, (0, 6))
+
+        self._shadow_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+        self._shadow_surf.blit(soft1, (0, 14))
+        self._shadow_surf.blit(soft2, (0, 6))
+        self._base.blit(self._shadow_surf, (0, 0))
 
         if self.style == 'blueprint':
             # Blueprint datum floor footprint & architectural projection lines
@@ -688,7 +692,71 @@ class IsometricRenderer:
                 self._block_textures[c_quant] = texture
             if self._can_texture(surface, pts):
                 pygame.gfxdraw.textured_polygon(surface, pts, texture, pts[0][0], pts[0][1])
-            self._outline(surface, color, pts, cut)
+
+            # Ancient Relic Ornate Details:
+            if len(pts) == 4:
+                # 1. Gilded Corner Brackets with Ancient Rivets
+                n = 4
+                for i in range(n):
+                    v = pts[i]
+                    p_prev = pts[(i - 1) % n]
+                    p_next = pts[(i + 1) % n]
+                    t_arm = 0.22
+                    b1 = (v[0] + (p_prev[0] - v[0]) * t_arm, v[1] + (p_prev[1] - v[1]) * t_arm)
+                    b2 = (v[0] + (p_next[0] - v[0]) * t_arm, v[1] + (p_next[1] - v[1]) * t_arm)
+                    tri = [(round(v[0]), round(v[1])), (round(b1[0]), round(b1[1])), (round(b2[0]), round(b2[1]))]
+                    pygame.draw.polygon(surface, (230, 185, 82), tri)
+                    pygame.draw.aalines(surface, (255, 235, 145), True, tri)
+                    # Golden corner rivet
+                    rv_x = round(v[0] * 0.70 + (b1[0] + b2[0]) * 0.15)
+                    rv_y = round(v[1] * 0.70 + (b1[1] + b2[1]) * 0.15)
+                    pygame.draw.circle(surface, (70, 50, 15), (rv_x, rv_y), 2)
+                    pygame.draw.circle(surface, (255, 240, 170), (rv_x, rv_y), 1)
+
+                # 2. Tactile center dividing seam with ornate gold inlay for elongated 1x1x2 faces
+                d01 = (pts[1][0] - pts[0][0]) ** 2 + (pts[1][1] - pts[0][1]) ** 2
+                d12 = (pts[2][0] - pts[1][0]) ** 2 + (pts[2][1] - pts[1][1]) ** 2
+                is_elongated = False
+                if d01 > d12 * 2.2:
+                    is_elongated = True
+                    m0 = ((pts[0][0] + pts[1][0]) // 2, (pts[0][1] + pts[1][1]) // 2)
+                    m1 = ((pts[3][0] + pts[2][0]) // 2, (pts[3][1] + pts[2][1]) // 2)
+                elif d12 > d01 * 2.2:
+                    is_elongated = True
+                    m0 = ((pts[1][0] + pts[2][0]) // 2, (pts[1][1] + pts[2][1]) // 2)
+                    m1 = ((pts[0][0] + pts[3][0]) // 2, (pts[0][1] + pts[3][1]) // 2)
+
+                if is_elongated:
+                    pygame.draw.aaline(surface, (245, 205, 95), (m0[0] - 1, m0[1] - 1), (m1[0] - 1, m1[1] - 1))
+                    pygame.draw.aaline(surface, (68, 48, 16), m0, m1)
+                    pygame.draw.aaline(surface, (255, 238, 140), (m0[0] + 1, m0[1] + 1), (m1[0] + 1, m1[1] + 1))
+                    sm_x, sm_y = (m0[0] + m1[0]) // 2, (m0[1] + m1[1]) // 2
+                    clasp = [(sm_x, sm_y - 3), (sm_x + 3, sm_y), (sm_x, sm_y + 3), (sm_x - 3, sm_y)]
+                    pygame.draw.polygon(surface, (245, 215, 105), clasp)
+                    pygame.draw.aalines(surface, (255, 245, 185), True, clasp)
+                else:
+                    cx = sum(p[0] for p in pts) / 4.0
+                    cy = sum(p[1] for p in pts) / 4.0
+                    min_x = min(p[0] for p in pts); max_x = max(p[0] for p in pts)
+                    min_y = min(p[1] for p in pts); max_y = max(p[1] for p in pts)
+                    if (max_x - min_x) > 20 and (max_y - min_y) > 16:
+                        e0 = ((pts[0][0] + pts[1][0]) / 2.0, (pts[0][1] + pts[1][1]) / 2.0)
+                        e1 = ((pts[1][0] + pts[2][0]) / 2.0, (pts[1][1] + pts[2][1]) / 2.0)
+                        e2 = ((pts[2][0] + pts[3][0]) / 2.0, (pts[2][1] + pts[3][1]) / 2.0)
+                        e3 = ((pts[3][0] + pts[0][0]) / 2.0, (pts[3][0] + pts[0][1]) / 2.0)
+                        d_pts = [
+                            (round(cx + (e0[0] - cx) * 0.58), round(cy + (e0[1] - cy) * 0.58)),
+                            (round(cx + (e1[0] - cx) * 0.58), round(cy + (e1[1] - cy) * 0.58)),
+                            (round(cx + (e2[0] - cx) * 0.58), round(cy + (e2[1] - cy) * 0.58)),
+                            (round(cx + (e3[0] - cx) * 0.58), round(cy + (e3[1] - cy) * 0.58)),
+                        ]
+                        pygame.draw.aalines(surface, (72, 50, 18), True, [(x + 1, y + 1) for x, y in d_pts])
+                        pygame.draw.aalines(surface, (255, 225, 115), True, d_pts)
+                        pygame.draw.circle(surface, (255, 240, 160), (round(cx), round(cy)), 2)
+                        pygame.draw.circle(surface, (110, 78, 22), (round(cx), round(cy)), 3, 1)
+
+            gold_edge = (248, 218, 120) if sum(color) > 300 else (210, 168, 75)
+            self._outline(surface, gold_edge, pts, cut)
             return
 
         if self.style == 'dream':
@@ -837,6 +905,14 @@ class IsometricRenderer:
         if intro_t is not None:
             # Map Assembly Intro (silky smooth pre-baked tile sprites rising from below at 60 FPS)
             self._frame.fill((0, 0, 0, 0))
+            if getattr(self, '_shadow_surf', None) is not None:
+                shadow_p = max(0.0, min(1.0, intro_t / 0.55))
+                if shadow_p > 0.02:
+                    shadow_alpha = int(255 * (1.0 - (1.0 - shadow_p) ** 2))
+                    self._shadow_surf.set_alpha(shadow_alpha)
+                    self._frame.blit(self._shadow_surf, (0, 0))
+                    self._shadow_surf.set_alpha(255)
+
             for depth, spr, (x0, y0), (r, c), delay, _, _ in self._tile_sprites:
                 p = max(0.0, min(1.0, (intro_t - delay) / 0.55))
                 ease = 1.0 - (1.0 - p) ** 3
@@ -859,12 +935,20 @@ class IsometricRenderer:
 
             surface.fill((0, 0, 0, 0) if surface.get_flags() & pygame.SRCALPHA else self.BACKGROUND)
             surface.blit(self._frame, (0, 0))
+            self._frame_key = None
             return
 
         if outro_t is not None:
             # Map Disassembly Outro (silky smooth chaotic swirling orbit at 60 FPS)
             self._frame.fill((0, 0, 0, 0))
-            p = min(1.0, max(0.0, outro_t))
+            if getattr(self, '_shadow_surf', None) is not None:
+                p = min(1.0, max(0.0, outro_t))
+                shadow_alpha = int(255 * max(0.0, 1.0 - p * 1.5))
+                if shadow_alpha > 0:
+                    self._shadow_surf.set_alpha(shadow_alpha)
+                    self._frame.blit(self._shadow_surf, (0, 0))
+                    self._shadow_surf.set_alpha(255)
+
             for depth, spr, (x0, y0), (r, c), delay, theta_base, radius_base in self._tile_sprites:
                 theta = theta_base + p * 3.8
                 radius = p * radius_base
@@ -878,6 +962,7 @@ class IsometricRenderer:
 
             surface.fill((0, 0, 0, 0) if surface.get_flags() & pygame.SRCALPHA else self.BACKGROUND)
             surface.blit(self._frame, (0, 0))
+            self._frame_key = None
             return
         key=(state,motion,static_key)
         if key!=self._frame_key:
