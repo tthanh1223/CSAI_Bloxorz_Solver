@@ -1160,14 +1160,17 @@ class IsometricRenderer:
                 c_light = (255, 225, 242, 245)
                 c_mid = (255, 125, 185, 230)
                 c_dark = (215, 60, 135, 210)
+                ring_col = (255, 180, 220)
             elif self.style == 'forest':
                 c_light = (255, 252, 185, 245)
                 c_mid = (255, 215, 30, 230)
                 c_dark = (205, 150, 10, 210)
+                ring_col = (255, 235, 90)
             else:  # 'blueprint' / paper
                 c_light = (255, 180, 180, 245)
                 c_mid = (245, 55, 55, 230)
                 c_dark = (185, 20, 20, 210)
+                ring_col = (255, 105, 105)
 
             gem_surf = pygame.Surface(self.size, pygame.SRCALPHA)
 
@@ -1188,6 +1191,15 @@ class IsometricRenderer:
                 pygame.draw.aaline(gem_surf, (255, 255, 255), top_p, eq[k])
                 pygame.draw.aaline(gem_surf, (255, 255, 255), bot_p, eq[k])
                 pygame.draw.aaline(gem_surf, (255, 255, 255), eq[k], eq[(k + 1) % 4])
+
+            # Tilted holographic orbital halo ring around diamond waist (bobs with z_mid)
+            ring_pts = [self.project((ar + 0.38 * cos(rot_ang * 1.6 + i * pi / 8),
+                                      ac + 0.38 * sin(rot_ang * 1.6 + i * pi / 8),
+                                      z_mid + 0.08 * sin(i * pi / 4))) for i in range(16)]
+            pygame.draw.aalines(gem_surf, (*ring_col, 200), True, ring_pts)
+            for k in (0, 4, 8, 12):
+                node_pt = ring_pts[k]
+                pygame.draw.circle(gem_surf, (255, 255, 255, 220), (round(node_pt[0]), round(node_pt[1])), 1)
 
             surface.blit(gem_surf, (0, 0))
 
@@ -1275,11 +1287,11 @@ class IsometricRenderer:
                     c_inner = (255, 220, 80)
                     c_outer = (180, 200, 40)
                     c_ground = (245, 210, 50)
-                else:  # blueprint
-                    c_core = (235, 255, 255)
-                    c_inner = (0, 230, 255)
-                    c_outer = (0, 140, 255)
-                    c_ground = (30, 180, 255)
+                else:  # blueprint / paper (Crimson Red Theme)
+                    c_core = (255, 245, 245)
+                    c_inner = (255, 60, 60)
+                    c_outer = (205, 20, 20)
+                    c_ground = (255, 55, 55)
 
                 # 1. Soft ground pool bloom & illuminated goal perimeter
                 rx = int((18.0 + sp * 35.0) * self.zoom)
@@ -1391,8 +1403,8 @@ class IsometricRenderer:
                         pygame.draw.circle(beam_surf, (255, 215, 60, int(f_a * 0.40)), (round(f_pos[0]), round(f_pos[1])), 5)
                         pygame.draw.circle(beam_surf, (255, 255, 200, f_a), (round(f_pos[0]), round(f_pos[1])), 2)
 
-                else:  # blueprint
-                    # Quantum Data Stream: Ascension pulse rings & coordinate markers
+                else:  # blueprint / paper (Crimson Red Uplink)
+                    # Quantum Data Stream: Crimson Ascension pulse rings & coordinate markers
                     for ring_i in range(3):
                         ring_t = ((ticks * 0.002 + ring_i * 0.33) % 1.0)
                         ring_z = ring_t * 4.2
@@ -1401,7 +1413,7 @@ class IsometricRenderer:
                         ring_a = max(0, int(beam_alpha * sin(pi * ring_t) * 0.70))
                         if ring_a > 0 and ring_rx > 2:
                             r_surf = pygame.Surface((ring_rx * 2 + 4, ring_ry * 2 + 4), pygame.SRCALPHA)
-                            pygame.draw.ellipse(r_surf, (0, 230, 255, ring_a), (2, 2, ring_rx * 2, ring_ry * 2), 1)
+                            pygame.draw.ellipse(r_surf, (255, 65, 65, ring_a), (2, 2, ring_rx * 2, ring_ry * 2), 1)
                             r_center = self.project((gr + 0.5, gc + 0.5, ring_z))
                             beam_surf.blit(r_surf, (r_center[0] - ring_rx - 2, r_center[1] - ring_ry - 2))
 
@@ -1415,10 +1427,10 @@ class IsometricRenderer:
                         if d_a <= 0:
                             continue
                         if i % 2 == 0:
-                            pygame.draw.line(beam_surf, (0, 240, 255, d_a), (d_pos[0] - 3, d_pos[1]), (d_pos[0] + 3, d_pos[1]), 1)
-                            pygame.draw.line(beam_surf, (0, 240, 255, d_a), (d_pos[0], d_pos[1] - 3), (d_pos[0], d_pos[1] + 3), 1)
+                            pygame.draw.line(beam_surf, (255, 80, 80, d_a), (d_pos[0] - 3, d_pos[1]), (d_pos[0] + 3, d_pos[1]), 1)
+                            pygame.draw.line(beam_surf, (255, 80, 80, d_a), (d_pos[0], d_pos[1] - 3), (d_pos[0], d_pos[1] + 3), 1)
                         else:
-                            pygame.draw.circle(beam_surf, (220, 255, 255, d_a), (round(d_pos[0]), round(d_pos[1])), 1)
+                            pygame.draw.circle(beam_surf, (255, 230, 230, d_a), (round(d_pos[0]), round(d_pos[1])), 1)
 
                 surface.blit(beam_surf, (0, 0))
         self.stats['material_cache_bytes']=sum(s.get_pitch()*s.get_height() for s in self.material_cache.values())
@@ -1523,8 +1535,8 @@ class IsometricRenderer:
             pit_deep = [project(dr * 0.72, dc * 0.72, -0.65) for dr, dc in ((-.36, -.36), (-.36, .36), (.36, .36), (.36, -.36))]
             pit_core = [project(dr * 0.35, dc * 0.35, -1.15) for dr, dc in ((-.36, -.36), (-.36, .36), (.36, .36), (.36, -.36))]
 
-            collar_col = (215, 160, 52) if self.style == 'forest' else ((245, 165, 192) if self.style == 'dream' else (58, 172, 225))
-            dark_collar = (90, 65, 20) if self.style == 'forest' else ((160, 88, 115) if self.style == 'dream' else (28, 78, 105))
+            collar_col = (215, 160, 52) if self.style == 'forest' else ((245, 165, 192) if self.style == 'dream' else (235, 52, 65))
+            dark_collar = (90, 65, 20) if self.style == 'forest' else ((160, 88, 115) if self.style == 'dream' else (120, 24, 32))
             pygame.draw.polygon(surface, dark_collar, outer_rim)
             pygame.draw.polygon(surface, collar_col, mid_rim)
 
@@ -1534,7 +1546,7 @@ class IsometricRenderer:
             pygame.draw.polygon(surface, (10, 14, 20), [pit_deep[0], pit_deep[1], pit_core[1], pit_core[0]])
             pygame.draw.polygon(surface, (4, 6, 10), pit_core)
 
-            rivet_col = (255, 240, 180) if self.style != 'blueprint' else (180, 245, 255)
+            rivet_col = (255, 240, 180) if self.style == 'forest' else ((255, 230, 240) if self.style == 'dream' else (255, 190, 190))
             for dr, dc in ((-.45, -.45), (-.45, .45), (.45, .45), (.45, -.45), (0, -.45), (0, .45), (-.45, 0), (.45, 0)):
                 pt = project(dr, dc)
                 pygame.draw.circle(surface, rivet_col, (round(pt[0]), round(pt[1])), 2)
@@ -1586,7 +1598,7 @@ class IsometricRenderer:
             pygame.draw.circle(surface, (255, 255, 255), (round(apex[0]), round(apex[1])), 2)
 
         elif kind == 'X':
-            # HEAVY SWITCH: Faceted Crystalline Ruby Cross with Holographic Diamond Field
+            # HEAVY SWITCH: Faceted Crystalline Ruby Cross aligned with tile diagonals (true 'X')
             pad = [project(-.35, -.35), project(-.35, .35), project(.35, .35), project(.35, -.35)]
             inner_pad = [project(-.30, -.30), project(-.30, .30), project(.30, .30), project(.30, -.30)]
             pygame.draw.polygon(surface, (18, 22, 30), pad)
@@ -1600,14 +1612,16 @@ class IsometricRenderer:
 
             dz_arm = 0.03 if not pressed else -0.015
             dz_ridge = dz_arm + (0.035 if not pressed else 0.015)
-            arm_l = 0.27
-            arm_w = 0.082
+            arm_l = 0.30
+            arm_w = 0.076
 
             r_light = (255, 140, 130) if not pressed else (240, 100, 95)
             r_mid = (235, 48, 58) if not pressed else (195, 32, 42)
             r_dark = (160, 20, 30) if not pressed else (125, 15, 22)
 
-            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            # 4 diagonal corner arms forming a clear, bold 'X' across the two diagonals of the tile
+            u = 0.7071
+            for dr, dc in ((-u, -u), (u, u), (-u, u), (u, -u)):
                 tip_apex = project(dr * arm_l, dc * arm_l, dz_ridge)
                 tip_left = project(dr * arm_l - dc * arm_w, dc * arm_l + dr * arm_w, dz_arm)
                 tip_right = project(dr * arm_l + dc * arm_w, dc * arm_l - dr * arm_w, dz_arm)
