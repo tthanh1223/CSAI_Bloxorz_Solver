@@ -39,6 +39,30 @@ ORIGINAL_DISTANCE = 2.5   # distance from the board centre, in board sizes (smal
 ORIGINAL_HEIGHT = 1.0     # one block unit of height, in tile widths
 
 
+# Floor tiles are separate chunky slabs (see _build_static).
+TILE_GAP = .03            # inset on each side, so neighbouring slabs show a seam
+TILE_BEVEL = .035         # rounded top edge
+TILE_THICKNESS = {'iso': .5, 'original': .55}  # in block units
+
+# One key light for floor and block, from the front-left and above, as a unit
+# vector in (row, col, z): top faces brightest, the front-left side medium,
+# the right side in shade, so every slab and the block read as solid 3D.
+_LIGHT = (.35, -.55, 1.0)
+LIGHT = tuple(v / sum(w * w for w in _LIGHT) ** .5 for v in _LIGHT)
+
+
+# Switches are raised push buttons: (base colour, height in block units).
+SWITCH_BUTTONS = {
+    'O':  ((158, 170, 194), .11),  # soft switch: round pale slate button
+    'X':  ((222, 140, 122), .12),  # heavy switch: soft coral cross
+    '<>': ((136, 174, 218), .11),  # split switch: round pale blue button
+}
+
+
+def tile_thickness(view: str) -> float:
+    return TILE_THICKNESS.get(view, .3)
+
+
 def height_scale(view: str) -> float:
     return ORIGINAL_HEIGHT if view == 'original' else HEIGHT_SCALE
 
@@ -344,6 +368,7 @@ class IsometricRenderer:
         self.style='dream'
         self.stone_texture=self.gold_texture=None
         self._brushed_detail=None
+        self.pixel_scale=1  # device pixels per logical pixel (2 on a Retina window)
 
     def set_stage(self, stage: StageData) -> None:
         self.stage = stage
@@ -376,7 +401,8 @@ class IsometricRenderer:
                       for z in (-.45, 2.2)]  # tile side .. standing block
             xs = [p[0] for p in points];ys = [p[1] for p in points]
             focal = min(size[0] * .88 / (max(xs) - min(xs)), size[1] * .88 / (max(ys) - min(ys)))
-            focal = max(2 * distance, min(112 * distance, focal))  # tile width 2..112 px at the centre
+            cap = 112 * self.pixel_scale  # tile width 2..112 logical px at the centre
+            focal = max(2 * distance, min(cap * distance, focal))
             origin = (size[0] / 2 - (min(xs) + max(xs)) * focal / 2,
                       size[1] / 2 - (min(ys) + max(ys)) * focal / 2)
             width = focal / distance  # tile width at the board centre, for markers and moss
@@ -384,7 +410,7 @@ class IsometricRenderer:
             return
         xs = [(c - r + delta) / 2 for r, c in cells for delta in (-1, 1)]
         ys = [(r + c) / 4 + delta for r, c in cells for delta in (-1.38, .68)]
-        width = max(2, min(112, size[0] * .88 / (max(xs) - min(xs)),
+        width = max(2, min(112 * self.pixel_scale, size[0] * .88 / (max(xs) - min(xs)),
                             size[1] * .88 / (max(ys) - min(ys))))
         origin = (size[0] / 2 - (min(xs) + max(xs)) * width / 2,
                   size[1] / 2 - (min(ys) + max(ys)) * width / 2)
@@ -417,25 +443,23 @@ class IsometricRenderer:
             normal = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
             length = max(1e-9, sum(n*n for n in normal) ** .5)
             top=abs(normal[2])/length
-            shade = .73 + .27 * top + .09 * abs(normal[0])/length
-            shaded=tuple(min(255,int(x*shade)) for x in color)
+            # Inward mesh winding -> outward normal, lit by LIGHT.
+            nx,ny,nz=(-value/length for value in normal)
+            diffuse=max(0.,nx*LIGHT[0]+ny*LIGHT[1]+nz*LIGHT[2])
             if player:
-                # Inward mesh winding -> outward normal. Fixed soft key light:
-                # upper face brightest, front medium, opposite side darker.
-                nx,ny,nz=(-value/length for value in normal)
-                diffuse=max(0.,nx*.39-ny*.20+nz*.90)
+                # Upper face brightest, front-left side medium, right side in shade.
                 hemisphere=max(0.,nz)
                 bevel_light=min(1.,4*abs(nz)*(abs(nx)+abs(ny)))
-                strength=.66+.32*diffuse+.06*hemisphere+.045*bevel_light
+                strength=.4+.62*diffuse+.05*hemisphere+.06*bevel_light
                 cream=(13,16,21)
                 shaded=tuple(max(0,min(255,round(v*strength+cream[k]*hemisphere))) for k,v in enumerate(color))
-            elif top<.4:
-                if color[0]>color[1]*1.12:
-                    shade=.67+.26*abs(normal[0])/length
-                    shaded=tuple(min(255,int(x*shade)) for x in color)
-                else:
+            else:
+                # Same three clear tones on every floor slab.
+                strength=.42+.6*diffuse
+                shaded=tuple(min(255,int(x*strength)) for x in color)
+                if top<.4 and color[0]<=color[1]*1.12:
                     tint=(154,143,126) if self.style=='blueprint' else (91,105,81) if self.style=='forest' else (161,132,163)
-                    shaded=tuple(int(a*.82+b*.18) for a,b in zip(shaded,tint))
+                    shaded=tuple(int(a*.88+b*.12) for a,b in zip(shaded,tint))
             result.append((depth, projected, shaded, outline))
         return result
 
@@ -454,16 +478,16 @@ class IsometricRenderer:
             for c,tile in enumerate(row):
                 coord=(r,c);bridge=self.bridge_cells.get(coord)
                 if bridge is not None:
-                    if bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
-                        pts=[self.project(p) for p in cuboid(r,c,-.12,1,1,0)[:4]]
-                        commands.append((self.camera.depth(r+.5,c+.5,0),'outline',pts));continue
+                    # A closed bridge is not drawn at all, so the player cannot see it coming.
+                    if bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:continue
                 elif tile==TileType.VOID or coord==broken:continue
-                top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
+                g,thick=TILE_GAP,tile_thickness(self.camera.view)
+                top=[self.project(p) for p in cuboid(r+g,c+g,0,1-2*g,1-2*g,0)[:4]]
                 tile_outlines.append(top)
                 pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
                 color=(112,145,151) if bridge is not None else ((178,200,193) if self.high_contrast else self.FLOOR)
                 if tile==TileType.FRAGILE:color=self.FRAGILE
-                vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.24,.976,.976,.24),.018)
+                vertices,indices=bevel_mesh(cuboid(r+g,c+g,-thick,1-2*g,1-2*g,thick),TILE_BEVEL)
                 for depth,pts,ink,edge in self._faces(vertices,color,faces=indices):
                     commands.append((depth,'face',(pts,ink)))
                 label='goal' if coord==self.stage.goal else '!' if tile==TileType.FRAGILE else ''
@@ -480,7 +504,6 @@ class IsometricRenderer:
                 else:pygame.draw.polygon(self._base,ink,pts)
                 # Bevel polygons provide edge shading; avoid stacking outlines.
             elif kind=='marker':self._marker(self._base,*payload)
-            else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
         soft_edges=self.style in ('dream','blueprint')
         seam={'dream':(244,242,229),'blueprint':(255,246,225),'forest':(102,112,80)}.get(self.style,(168,174,163))
         seams=pygame.Surface(self.size,pygame.SRCALPHA)
@@ -742,9 +765,12 @@ class IsometricRenderer:
                 delta=rng.choice((-9,-5,4,8))
                 pygame.draw.line(surface,tuple(max(0,min(255,c+delta)) for c in color),p,(p[0]+rng.uniform(.5,1.5),p[1]))
             return
+        # Chips take the face's light too: shaded sides get darker chips, so the
+        # side stays darker than the top instead of glowing with bright chips.
+        light=min(1.,sum(color)/600)
         for u,v,s,index in self.flecks:
             def at(x,y):return (a[0]+(b[0]-a[0])*x+(d[0]-a[0])*y,a[1]+(b[1]-a[1])*x+(d[1]-a[1])*y)
-            ink=tuple(min(255,max(0,c+(7 if index%2 else -8))) for c in color) if warm else tuple(int(c*.25+p*.75) for c,p in zip(color,palette[index]))
+            ink=tuple(min(255,max(0,c+(7 if index%2 else -8))) for c in color) if warm else tuple(int(c*.25+p*.75*light) for c,p in zip(color,palette[index]))
             pygame.draw.polygon(surface,ink,[at(u,v),at(u+s,v+s*.2),at(u+s*.4,v+s),at(u-s*.3,v+s*.5)])
 
     def _stone_material(self,surface,points,color):
@@ -785,6 +811,52 @@ class IsometricRenderer:
                         pygame.draw.circle(self._base,rng.choice(((64,80,30),(90,109,39),(120,131,54))),
                                            (round(x+rng.uniform(-2,2)),round(y+i*3)),max(1,round(self.zoom*1.4)))
 
+    def _switch_button(self, surface, r, c, kind):
+        """A raised push button on the tile centred at (r, c).
+
+        The outline (in tile units around the centre) is extruded to the
+        button's height: sides shaded by LIGHT and drawn back to front, then
+        the lit top with the symbol pressed into it.
+        """
+        color, height = SWITCH_BUTTONS[kind]
+        if kind == 'X':  # heavy switch: a chunky cross (a plus sign turned 45 degrees)
+            a, reach = .09, .38
+            plus = [(reach, a), (a, a), (a, reach), (-a, reach), (-a, a), (-reach, a),
+                    (-reach, -a), (-a, -a), (-a, -reach), (a, -reach), (a, -a), (reach, -a)]
+            outline = [((x - y) * .7071, (x + y) * .7071) for x, y in plus]
+        else:  # soft and split switches: a round button
+            outline = [(.32 * cos(i * pi / 14), .32 * sin(i * pi / 14)) for i in range(28)]
+        def at(dr, dc, z):
+            return self.project((r + dr, c + dc, z))
+        def lit(normal, strength=1.):
+            light = max(0., sum(n * l for n, l in zip(normal, LIGHT)))
+            return tuple(min(255, int(v * (.42 + .62 * light) * strength)) for v in color)
+        # Soft contact shadow, then the sides from far to near.
+        pygame.draw.polygon(surface, (40, 36, 44), [at(dr * 1.12, dc * 1.12, 0) for dr, dc in outline])
+        sides = []
+        for (ar, ac), (br, bc) in zip(outline, outline[1:] + outline[:1]):
+            mid_r, mid_c = (ar + br) / 2, (ac + bc) / 2
+            nr, nc = bc - ac, -(br - ar)  # edge normal, flipped to point away from the centre
+            if nr * mid_r + nc * mid_c < 0:
+                nr, nc = -nr, -nc
+            length = max(1e-9, (nr * nr + nc * nc) ** .5)
+            quad = [at(ar, ac, 0), at(br, bc, 0), at(br, bc, height), at(ar, ac, height)]
+            sides.append((self.camera.depth(r + mid_r, c + mid_c, height / 2), quad, lit((nr / length, nc / length, 0))))
+        for _, quad, ink in sorted(sides, key=lambda item: item[0]):
+            pygame.draw.polygon(surface, ink, quad)
+        top = [at(dr, dc, height) for dr, dc in outline]
+        top_ink = lit((0, 0, 1), 1.05)
+        pygame.draw.polygon(surface, top_ink, top)
+        pygame.draw.aalines(surface, tuple(min(255, v + 40) for v in top_ink), True, top)
+        engrave = tuple(int(v * .6) for v in top_ink)
+        def groove(points):
+            pygame.draw.aalines(surface, engrave, False, [at(dr, dc, height) for dr, dc in points])
+        if kind == 'O':
+            groove([(.17 * cos(i * pi / 12), .17 * sin(i * pi / 12)) for i in range(25)])
+        elif kind == '<>':
+            groove([(-.14, -.05), (-.14, -.17), (.14, -.17), (.14, -.05)])
+            groove([(-.14, .05), (-.14, .17), (.14, .17), (.14, .05)])
+
     def _marker(self, surface, point, kind):
         r, c, z = point
         ink = (121, 104, 137)
@@ -796,7 +868,9 @@ class IsometricRenderer:
             # Recessed opening with a light far rim, no text label.
             hole = [project(-.34,-.34), project(-.34,.34), project(.34,.34), project(.34,-.34)]
             pygame.draw.polygon(surface, (13, 24, 32), hole)
-            inner=[(x,y+self.camera.tile_width*.12*self.zoom) for x,y in hole]
+            # Inner walls go down to about half the slab, so the hole has depth.
+            deep = -.5 * tile_thickness(self.camera.view)
+            inner = [self.project((r + dr, c + dc, deep)) for dr, dc in ((-.34,-.34), (-.34,.34), (.34,.34), (.34,-.34))]
             pygame.draw.polygon(surface,(89,83,111),[hole[0],hole[1],inner[1],inner[0]])
             pygame.draw.polygon(surface,(63,64,87),[hole[0],inner[0],inner[3],hole[3]])
             pygame.draw.aalines(surface, (250,231,212), True, hole)
@@ -808,14 +882,7 @@ class IsometricRenderer:
                     for t in (.16,.34,.52,.7,.88):
                         x,y=a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t
                         pygame.draw.circle(surface,(94,103,76),(round(x),round(y)),1)
-        elif kind == 'O':
-            points = [project(.23*cos(i*pi/16), .23*sin(i*pi/16)) for i in range(33)]
-            pygame.draw.aalines(surface, ink, False, points)
-        elif kind == 'X':
-            line([(-.24,-.24),(.24,.24)])
-            line([(-.24,.24),(.24,-.24)])
-        elif kind == '<>':
-            line([(-.24,-.12),(-.24,-.27),(.24,-.27),(.24,-.12)])
-            line([(-.24,.12),(-.24,.27),(.24,.27),(.24,.12)])
+        elif kind in SWITCH_BUTTONS:
+            self._switch_button(surface, r, c, kind)
         elif kind == '!':
             line([(-.4,-.12),(-.1,.06),(.02,-.14),(.22,.12),(.4,.02)], (87, 78, 71))

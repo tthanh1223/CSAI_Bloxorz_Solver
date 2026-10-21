@@ -21,6 +21,14 @@ def scene(app):
     return result
 
 
+def sharp_board(app):
+    """On a HiDPI (Retina) window the board is left out of the 1x UI frame and
+    drawn at full resolution by BloxorzApp.present(), so tiles and block stay
+    sharp. Modals keep the 1x board, since they shade it."""
+    return (getattr(app,'hidpi',1)>1 and getattr(app,'visual_style','dream')!='forest_gl'
+            and not (app.menu or app.stage_picker or app.win_phase=='choice'))
+
+
 def draw(app):
     """Cache the composed UI independently of the animated board."""
     mouse=pygame.mouse.get_pos()
@@ -36,11 +44,15 @@ def draw(app):
     cached=getattr(app,'_presentation_cache',None)
     if cached and cached[0]==ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase=='choice'):
         if cached[1]==board_key:return False
+        if sharp_board(app):  # the UI is unchanged; present() redraws the board
+            app._presentation_cache=(ui_key,board_key,cached[2])
+            return True
         app.screen.blit(cached[2],(0,0))
         rect=app.board_rect
         app.screen.blit(scene(app),rect,rect)
         board=app._board_surface
         app.renderer.zoom,app.renderer.pan=app.zoom,tuple(app.pan)
+        app.renderer.pixel_scale=1
         app.renderer.draw(board,app.session.current_state,app.animation.frame)
         app.screen.blit(board,rect)
         # The cached UI snapshot remains immutable; it is not duplicated every frame.
@@ -78,8 +90,10 @@ def _draw(app):
         app._board_surface=board
     app.renderer.zoom, app.renderer.pan = app.zoom, tuple(app.pan)
     app.renderer.high_contrast = app.high_contrast
-    app.renderer.draw(board, app.session.current_state, app.animation.frame)
-    screen.blit(board, app.board_rect)
+    if not sharp_board(app):
+        app.renderer.pixel_scale = 1
+        app.renderer.draw(board, app.session.current_state, app.animation.frame)
+        screen.blit(board, app.board_rect)
     panel = pygame.Surface((T.PANEL_WIDTH+32,h-112),pygame.SRCALPHA)
     if style=='blueprint':
         panel.fill((*T.PANEL,70))
@@ -274,6 +288,6 @@ def _draw(app):
                      'Z: undo · R: restart · Esc: close menu', 'Scroll: zoom · Right-drag: pan the camera',
                      'V: switch camera view · Falling off restarts',
                      'Circle: soft switch · X: heavy switch', 'Brackets: split switch · Crack: fragile tile',
-                     'Outlined bridge: off · Light cube: active']
+                     'Hidden bridges appear when a switch opens them · Light cube: active']
             for i, line in enumerate(lines):
                 label(line, r.x + 32, r.y + 88 + i * 40, T.TEXT if i == 0 else T.MUTED, max_width=mw - 64)
