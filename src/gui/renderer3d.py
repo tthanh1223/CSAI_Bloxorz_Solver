@@ -177,19 +177,34 @@ def state_meshes(state: GameState) -> list[tuple[list[Point], bool]]:
                    2 if state.orientation == Orientation.STANDING else 1), False)]
 
 
-def rotate_mesh(vertices: list[Point], action: Action, progress: float) -> list[Point]:
-    """Rotate about the leading ground edge with inertia cresting and impact cushion."""
+def rotate_mesh(vertices: list[Point], action: Action, progress: float,
+                before_orient: Orientation | None = None,
+                after_orient: Orientation | None = None) -> list[Point]:
+    """Rotate about the leading ground edge with center-of-mass inertia and impact cushion."""
     axis = 0 if action in (Action.UP, Action.DOWN) else 1
     positive = action in (Action.DOWN, Action.RIGHT)
     pivot = (max if positive else min)(p[axis] for p in vertices)
 
-    # Physical inertia cresting curve: initial push resistance -> acceleration over crest
     p = max(0.0, min(1.0, progress))
-    eased_p = p * (1.0 - sin(pi * p) * 0.16)
-    angle = eased_p * pi / 2 * (1 if positive else -1)
 
-    # Impact landing cushion / squash damping on contact
-    squash = (sin(pi * (p - 0.84) / 0.16) * 0.038) if p > 0.84 else 0.0
+    # Center-of-mass differentiation:
+    if before_orient == Orientation.STANDING and after_orient in (Orientation.LYING_H, Orientation.LYING_V):
+        # STANDING -> LYING: Falling from z=1.0 to z=0.5 -> Gravity accelerates over crest
+        eased_p = p * (1.0 + (1.0 - p) * 0.14)
+        angle = eased_p * pi / 2 * (1 if positive else -1)
+        # Heavy solid thud landing cushion
+        squash = (sin(pi * (p - 0.78) / 0.22) * 0.052) if p > 0.78 else 0.0
+    elif before_orient in (Orientation.LYING_H, Orientation.LYING_V) and after_orient == Orientation.STANDING:
+        # LYING -> STANDING: Lifting from z=0.5 to z=1.0 -> Effort to crest, then snapping into upright lock
+        eased_p = p * (1.0 - sin(pi * p) * 0.22)
+        angle = eased_p * pi / 2 * (1 if positive else -1)
+        # Upright rebound damping
+        squash = (sin(pi * (p - 0.85) / 0.15) * 0.024) if p > 0.85 else 0.0
+    else:
+        # LYING -> LYING or SPLIT: Smooth balanced roll
+        eased_p = p * (1.0 - sin(pi * p) * 0.16)
+        angle = eased_p * pi / 2 * (1 if positive else -1)
+        squash = (sin(pi * (p - 0.84) / 0.16) * 0.038) if p > 0.84 else 0.0
 
     result = []
     for point in vertices:
@@ -218,7 +233,7 @@ def motion_meshes(motion: MotionFrame) -> list[tuple[list[Point], bool]]:
         after.pos1, after.pos2, after.orientation)
     roll_progress = min(1.0, motion.progress / 0.65) if teleport else motion.progress
     meshes = state_meshes(before)
-    rotated = [(rotate_mesh(v, action, roll_progress)
+    rotated = [(rotate_mesh(v, action, roll_progress, before.orientation, after.orientation)
                 if before.orientation != Orientation.SPLIT or i == before.active_cube else v, active)
                for i, (v, active) in enumerate(meshes)]
     if teleport and motion.progress > 0.65:
@@ -289,6 +304,18 @@ def fall_meshes(motion: MotionFrame, tip: Tip | None) -> list[tuple[list[Point],
         if moving:
             if tip is not None:
                 vertices = tip_mesh(vertices, tip, min(1.0, t * 1.8))
+                if t > 0.35:
+                    tumble = (t - 0.35) * 1.4
+                    axis_tumble = 1 if tip[0] == 0 else 0
+                    c_mid = sum(p[axis_tumble] for p in vertices) / len(vertices)
+                    ang_tumble = sin(tumble * pi * 0.8) * 0.45 * tip[1]
+                    tumbled = []
+                    for r, c, z in vertices:
+                        coord = list((r, c, z))
+                        off = coord[axis_tumble] - c_mid
+                        coord[axis_tumble] = c_mid + off * cos(ang_tumble) - z * sin(ang_tumble) * 0.2
+                        tumbled.append(tuple(coord))
+                    vertices = tumbled
             vertices = [(r, c, z - drop) for r, c, z in vertices]
         result.append((vertices, active, moving))
     return result
@@ -985,6 +1012,8 @@ class IsometricRenderer:
                                 for _, b_pts, b_ink, _ in sorted(self._faces(b_verts, b_col, faces=b_idx_list), key=lambda it: it[0]):
                                     pygame.draw.polygon(self._frame, b_ink, b_pts)
                                 pygame.draw.aalines(self._frame, (120, 240, 255), True, [self.project(p) for p in cuboid(br_r, br_c, b_z, 1, 1, 0)[:4]])
+                                if b_p >= 0.84:
+                                    pygame.draw.aalines(self._frame, (255, 255, 255), True, [self.project(p) for p in cuboid(br_r, br_c, 0.01, 1, 1, 0)[:4]])
                             elif old_s and not new_s:
                                 # Bridge Closing: Sinking down into the abyss with fading alpha
                                 b_z = -4.5 * (b_p ** 1.8)
@@ -1157,6 +1186,125 @@ class IsometricRenderer:
                 wave_color = (255, 235, 170, alpha) if self.style == 'dream' else ((60, 240, 255, alpha) if self.style == 'blueprint' else (160, 255, 140, alpha))
                 pygame.draw.ellipse(wave_surf, wave_color, wave_rect, max(1, int(3 * (1.0 - p) * self.zoom)))
                 surface.blit(wave_surf, (center[0] - rx - 2, center[1] - ry - 2))
+
+        # Ground impact landing dust puffs / sparkles
+        if motion and not motion.falling and not motion.sinking and motion.progress > 0.82:
+            ip = (motion.progress - 0.82) / 0.18
+            i_alpha = max(0, int(190 * (1.0 - ip)))
+            if i_alpha > 0:
+                dust_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+                landing_cells = [motion.after.pos1]
+                if motion.after.orientation != Orientation.STANDING:
+                    landing_cells.append(motion.after.pos2)
+                for lr, lc in landing_cells:
+                    for dr, dc in ((0.05, 0.05), (0.05, 0.95), (0.95, 0.95), (0.95, 0.05)):
+                        puff_r = lr + dr + (dr - 0.5) * 0.35 * ip
+                        puff_c = lc + dc + (dc - 0.5) * 0.35 * ip
+                        pt = self.project((puff_r, puff_c, 0.02))
+                        p_rad = max(1, int((2.0 + ip * 1.5) * self.zoom))
+                        if self.style == 'dream':
+                            p_col = (255, 215, 235, i_alpha)
+                        elif self.style == 'forest':
+                            p_col = (235, 220, 140, i_alpha)
+                        else:
+                            p_col = (140, 240, 255, i_alpha)
+                        pygame.draw.circle(dust_surf, p_col, (round(pt[0]), round(pt[1])), p_rad)
+                surface.blit(dust_surf, (0, 0))
+
+        # Quantum teleport tracer stream when splitting
+        if motion and not motion.falling and not motion.sinking:
+            raw = BloxorzProblem.roll_block(motion.before, motion.action)
+            is_split_tel = (raw is not None and motion.after.orientation == Orientation.SPLIT
+                            and motion.before.orientation != Orientation.SPLIT)
+            if is_split_tel and motion.progress > 0.35:
+                tp = (motion.progress - 0.35) / 0.65
+                stream_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+                s_alpha = max(0, int(220 * sin(pi * tp)))
+                src_pt = self.project((raw.pos1[0] + 0.5, raw.pos1[1] + 0.5, 0.15 + (1.0 - tp) * 0.6))
+                for target_pos in (motion.after.pos1, motion.after.pos2):
+                    dst_pt = self.project((target_pos[0] + 0.5, target_pos[1] + 0.5, 0.20 + (1.0 - tp) * 0.5))
+                    ctrl_r = (raw.pos1[0] + target_pos[0]) * 0.5
+                    ctrl_c = (raw.pos1[1] + target_pos[1]) * 0.5
+                    ctrl_pt = self.project((ctrl_r, ctrl_c, 1.25))
+                    beam_pts = []
+                    for s_step in range(11):
+                        st = s_step / 10.0
+                        bx = (1 - st) ** 2 * src_pt[0] + 2 * (1 - st) * st * ctrl_pt[0] + st ** 2 * dst_pt[0]
+                        by = (1 - st) ** 2 * src_pt[1] + 2 * (1 - st) * st * ctrl_pt[1] + st ** 2 * dst_pt[1]
+                        beam_pts.append((bx, by))
+                    beam_col = (180, 255, 255, s_alpha)
+                    pygame.draw.lines(stream_surf, (30, 210, 245, s_alpha // 2), False, beam_pts, 4)
+                    pygame.draw.aalines(stream_surf, beam_col, False, beam_pts)
+                surface.blit(stream_surf, (0, 0))
+
+        # Magnetic merge electric arcs between converging cubes
+        if motion and not motion.falling and not motion.sinking:
+            is_merge = (motion.before.orientation == Orientation.SPLIT
+                        and motion.after.orientation != Orientation.SPLIT)
+            if is_merge and motion.progress > 0.60:
+                mp = (motion.progress - 0.60) / 0.40
+                arc_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+                arc_alpha = max(0, int(230 * sin(pi * mp)))
+                c1_pt = self.project((motion.after.pos1[0] + 0.5, motion.after.pos1[1] + 0.5, 0.5))
+                c2_pt = self.project((motion.after.pos2[0] + 0.5, motion.after.pos2[1] + 0.5, 0.5))
+                ticks = pygame.time.get_ticks()
+                for arc_i in range(2):
+                    arc_pts = [c1_pt]
+                    for seg in range(1, 4):
+                        st = seg / 4.0
+                        mx = c1_pt[0] + (c2_pt[0] - c1_pt[0]) * st + sin(ticks * 0.05 + seg * 2.3 + arc_i) * 9.0
+                        my = c1_pt[1] + (c2_pt[1] - c1_pt[1]) * st + cos(ticks * 0.06 + seg * 2.7 + arc_i) * 7.0
+                        arc_pts.append((mx, my))
+                    arc_pts.append(c2_pt)
+                    arc_col = (255, 255, 255, arc_alpha) if arc_i == 0 else (120, 245, 255, arc_alpha)
+                    pygame.draw.lines(arc_surf, arc_col, False, arc_pts, 2)
+                surface.blit(arc_surf, (0, 0))
+
+        # Celestial ascension beam when sinking into the goal hole
+        if motion and motion.sinking:
+            gr, gc = self.stage.goal
+            sp = max(0.0, min(1.0, motion.progress))
+            beam_alpha = min(220, int(255 * sin(pi * sp * 0.88)))
+            if beam_alpha > 0:
+                beam_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+                b_center = self.project((gr + 0.5, gc + 0.5, 0.0))
+                b_top = self.project((gr + 0.5, gc + 0.5, 4.2))
+
+                rx = int((24.0 + sin(sp * pi) * 7.0) * self.zoom)
+                top_rx = int(rx * 1.35)
+
+                p_base_l = (b_center[0] - rx, b_center[1])
+                p_base_r = (b_center[0] + rx, b_center[1])
+                p_top_r = (b_top[0] + top_rx, b_top[1])
+                p_top_l = (b_top[0] - top_rx, b_top[1])
+
+                if self.style == 'dream':
+                    beam_glow = (255, 185, 220, beam_alpha // 2)
+                    beam_core = (255, 245, 250, beam_alpha)
+                    speck_col = (255, 255, 255)
+                elif self.style == 'forest':
+                    beam_glow = (255, 225, 90, beam_alpha // 2)
+                    beam_core = (255, 252, 210, beam_alpha)
+                    speck_col = (255, 245, 180)
+                else:  # blueprint
+                    beam_glow = (40, 215, 255, beam_alpha // 2)
+                    beam_core = (210, 255, 255, beam_alpha)
+                    speck_col = (180, 250, 255)
+
+                pygame.draw.polygon(beam_surf, beam_glow, [p_base_l, p_base_r, p_top_r, p_top_l])
+                pygame.draw.line(beam_surf, beam_core, b_center, b_top, max(2, int(4 * self.zoom)))
+
+                ticks = pygame.time.get_ticks()
+                for si in range(8):
+                    seed = si * 47 + 19
+                    drift = ((ticks * 0.003 + seed) % 1.0)
+                    sz = drift * 4.2
+                    s_pt = self.project((gr + 0.5 + sin(seed + ticks * 0.004) * 0.28,
+                                         gc + 0.5 + cos(seed + ticks * 0.004) * 0.28, sz))
+                    s_a = max(0, int(230 * sin(pi * drift)))
+                    pygame.draw.circle(beam_surf, (*speck_col, s_a), (round(s_pt[0]), round(s_pt[1])), 2)
+
+                surface.blit(beam_surf, (0, 0))
         self.stats['material_cache_bytes']=sum(s.get_pitch()*s.get_height() for s in self.material_cache.values())
         self.stats['block_texture_bytes']=sum(s.get_pitch()*s.get_height() for s in self._block_textures.values())
 
