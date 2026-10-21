@@ -15,11 +15,11 @@ DREAM = (
     (132, 98, 116),   # MUTED
     (186, 160, 172),  # DISABLED
     (235, 212, 210),  # LINE
-    (236, 138, 92),   # ACCENT (warm coral terracotta)
-    (248, 158, 114),  # ACCENT_HOVER
+    (236, 120, 154),  # ACCENT (sparkly rose pink)
+    (248, 146, 178),  # ACCENT_HOVER
     (255, 252, 248),  # INK
-    (252, 238, 234),  # FLOOR (luminous peach-pink alabaster, matching sunset)
-    (238, 142, 98),   # BLOCK (warm sunlit rose-gold terracotta)
+    (226, 232, 224),  # FLOOR (luminous alabaster terrazzo base matching main)
+    (242, 146, 176),  # BLOCK (radiant pastel rose gold)
 )
 
 BLUEPRINT = (
