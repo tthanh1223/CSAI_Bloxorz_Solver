@@ -178,17 +178,28 @@ def state_meshes(state: GameState) -> list[tuple[list[Point], bool]]:
 
 
 def rotate_mesh(vertices: list[Point], action: Action, progress: float) -> list[Point]:
-    """Rotate about the leading ground edge, without sliding."""
+    """Rotate about the leading ground edge with inertia cresting and impact cushion."""
     axis = 0 if action in (Action.UP, Action.DOWN) else 1
     positive = action in (Action.DOWN, Action.RIGHT)
     pivot = (max if positive else min)(p[axis] for p in vertices)
-    angle = progress * pi / 2 * (1 if positive else -1)
+
+    # Physical inertia cresting curve: initial push resistance -> acceleration over crest
+    p = max(0.0, min(1.0, progress))
+    eased_p = p * (1.0 - sin(pi * p) * 0.16)
+    angle = eased_p * pi / 2 * (1 if positive else -1)
+
+    # Impact landing cushion / squash damping on contact
+    squash = (sin(pi * (p - 0.84) / 0.16) * 0.038) if p > 0.84 else 0.0
+
     result = []
     for point in vertices:
         v = list(point)
         offset, z = point[axis] - pivot, point[2]
         v[axis] = pivot + offset * cos(angle) + z * sin(angle)
         v[2] = -offset * sin(angle) + z * cos(angle)
+        if squash > 0.001 and v[2] > 0.01:
+            v[2] = v[2] * (1.0 - squash)
+            v[axis] += (v[axis] - pivot) * squash * 0.35
         result.append(tuple(v))
     return result
 
@@ -196,7 +207,12 @@ def rotate_mesh(vertices: list[Point], action: Action, progress: float) -> list[
 def motion_meshes(motion: MotionFrame) -> list[tuple[list[Point], bool]]:
     before, after, action = motion.before, motion.after, motion.action
     if action == Action.SPACE:
-        return state_meshes(after if motion.progress >= 0.5 else before)
+        t = motion.progress
+        # Micro-bob jump on the selected active cube
+        hop = sin(pi * t) * 0.18
+        meshes = state_meshes(after if t >= 0.5 else before)
+        return [([(r, c, z + (hop if i == after.active_cube else 0.0)) for r, c, z in v], active)
+                for i, (v, active) in enumerate(meshes)]
     raw = BloxorzProblem.roll_block(before, action)
     teleport = raw is not None and (raw.pos1, raw.pos2, raw.orientation) != (
         after.pos1, after.pos2, after.orientation)
@@ -206,11 +222,13 @@ def motion_meshes(motion: MotionFrame) -> list[tuple[list[Point], bool]]:
                 if before.orientation != Orientation.SPLIT or i == before.active_cube else v, active)
                for i, (v, active) in enumerate(meshes)]
     if teleport and motion.progress > 0.65:
+        # Magnetic snap curve on merge/teleport
         t = (motion.progress - 0.65) / 0.35
+        snap_t = t * t * (3.0 - 2.0 * t)  # Smoothstep magnetic convergence
         assert raw is not None
         r, c = raw.pos1
         source = [cuboid(r, c, z, 1, 1, 1) for z in (0, 1)]
-        return [([tuple(a + (b - a) * t for a, b in zip(p, q))
+        return [([tuple(a + (b - a) * snap_t for a, b in zip(p, q))
                   for p, q in zip(source[i], vertices)], active)
                 for i, (vertices, active) in enumerate(state_meshes(after))]
     return rotated
@@ -797,7 +815,7 @@ class IsometricRenderer:
         box=pygame.Rect(min(xs),min(ys),max(xs)-min(xs)+1,max(ys)-min(ys)+1)
         return max(ys)>min(ys) and box.colliderect(surface.get_clip())
 
-    def draw(self, surface, state, motion=None, intro_t=None, outro_t=None):
+    def draw(self, surface, state, motion=None, intro_t=None, outro_t=None, shockwave=None):
         if surface.get_size() != self.size:
             self.resize(surface.get_size())
         if self._frame.get_size() != self.size:
@@ -920,6 +938,17 @@ class IsometricRenderer:
                 sinking=bool(motion and motion.sinking)
                 meshes=sink_meshes(motion) if sinking else motion_meshes(motion) if motion else state_meshes(state)
             self._frame.blit(self._base,(0,0))
+            # Physical switch depression when stepped on
+            for coord in (shown.pos1, shown.pos2):
+                if coord in self.stage.switches:
+                    sw_type = self.stage.switches[coord].type.value
+                    sw_label = {'SOFT': 'O', 'HEAVY': 'X', 'SPLIT': '<>'}[sw_type]
+                    r, c = coord
+                    tile_top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
+                    bridge = self.bridge_cells.get(coord)
+                    color = (112, 145, 151) if bridge is not None else ((178, 200, 193) if self.high_contrast else self.FLOOR)
+                    self._material(self._frame, tile_top, color)
+                    self._marker(self._frame, (r + 0.5, c + 0.5, -0.05), sw_label)
             # Work only on the small projected shadow footprint, not the full viewport.
             shadow_meshes=([(v,a) for v,a,moving in tagged if not moving] if falling and dropping
                            else [] if motion and motion.sinking else meshes)
@@ -930,10 +959,13 @@ class IsometricRenderer:
                 x,y=floor(min(p[0] for p in all_points))-4,floor(min(p[1] for p in all_points))-4
                 bounds=pygame.Rect(x,y,ceil(max(p[0] for p in all_points))-x+5,ceil(max(p[1] for p in all_points))-y+5).clip(self._frame.get_rect())
             if bounds.width and bounds.height:
+                min_z = max(0.0, min((p[2] for vertices, _ in shadow_meshes for p in vertices), default=0.0))
+                shadow_alpha = max(24, int(82 - min(min_z, 1.2) * 48))
+                shadow_tint = {'dream': (92, 58, 88), 'forest': (18, 30, 22), 'blueprint': (14, 38, 54)}.get(self.style, (72, 52, 78))
                 contact=pygame.Surface(bounds.size,pygame.SRCALPHA)
                 for hull in hulls:
                     if len(hull)>=3:
-                        pygame.draw.polygon(contact,(72,52,78,75),[(a-bounds.x,b-bounds.y) for a,b in hull])
+                        pygame.draw.polygon(contact,(*shadow_tint, shadow_alpha),[(a-bounds.x,b-bounds.y) for a,b in hull])
                 contact.blit(self._top_mask,(0,0),bounds,special_flags=pygame.BLEND_RGBA_MULT)
                 self._frame.blit(contact,bounds)
             faces=[]
@@ -950,10 +982,57 @@ class IsometricRenderer:
                 faces.extend(self._faces(vertices,color,faces=indices,player=True,
                                          cut=falling and away and dropping and mesh_moving))
             for _,pts,color,cut in sorted(faces,key=lambda item:item[0]):self._block_face(self._frame,pts,color,cut)
+
+            # Active Cube Holographic Beacon in SPLIT mode
+            if state.orientation == Orientation.SPLIT and not falling:
+                act_coord = state.pos1 if state.active_cube == 0 else state.pos2
+                ar, ac = act_coord
+                b_color = (255, 230, 110) if self.style == 'dream' else ((60, 240, 255) if self.style == 'blueprint' else (180, 255, 120))
+                d_top = self.project((ar + 0.5, ac + 0.5, 1.42))
+                d_right = self.project((ar + 0.64, ac + 0.5, 1.30))
+                d_bot = self.project((ar + 0.5, ac + 0.5, 1.18))
+                d_left = self.project((ar + 0.36, ac + 0.5, 1.30))
+                pygame.draw.polygon(self._frame, (*b_color, 210), [d_top, d_right, d_bot, d_left])
+                pygame.draw.aalines(self._frame, (255, 255, 255), True, [d_top, d_right, d_bot, d_left])
+
+            # Fragile tile shatter & crumble physics
+            if broken is not None and motion and motion.falling and motion.progress >= FALL_ROLL_END:
+                br, bc = broken
+                t = max(0.0, min(1.0, (motion.progress - FALL_ROLL_END) / (1.0 - FALL_ROLL_END)))
+                shards = [
+                    ((br + 0.5, bc + 0.5), (br, bc), (br, bc + 1.0), -0.38, 0.0),
+                    ((br + 0.5, bc + 0.5), (br, bc + 1.0), (br + 1.0, bc + 1.0), 0.0, 0.38),
+                    ((br + 0.5, bc + 0.5), (br + 1.0, bc + 1.0), (br + 1.0, bc), 0.38, 0.0),
+                    ((br + 0.5, bc + 0.5), (br + 1.0, bc), (br, bc), 0.0, -0.38)
+                ]
+                shard_alpha = max(0, int(210 * (1.0 - t)))
+                dz = -3.5 * (t ** 2)
+                for p1, p2, p3, dr, dc in shards:
+                    pts = [self.project((r + dr * t, c + dc * t, dz)) for r, c in (p1, p2, p3)]
+                    shard_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+                    pygame.draw.polygon(shard_surf, (*self.FRAGILE, shard_alpha), pts)
+                    pygame.draw.aalines(shard_surf, (255, 200, 140, shard_alpha), True, pts)
+                    self._frame.blit(shard_surf, (0, 0))
+
             self._frame_key=key
         else:self.stats['frame_cache_hits']+=1
         surface.fill((0,0,0,0) if surface.get_flags()&pygame.SRCALPHA else self.BACKGROUND)
         surface.blit(self._frame,(0,0))
+
+        # Expanding magnetic merge shockwave ring
+        if shockwave is not None:
+            sr, sc, st = shockwave
+            p = max(0.0, min(1.0, st / 0.35))
+            center = self.project((sr + 0.5, sc + 0.5, 0.02))
+            rx = int((20.0 + p * 65.0) * self.zoom)
+            ry = int(rx * 0.48)
+            alpha = int(180 * (1.0 - p))
+            if rx > 2 and ry > 2 and alpha > 0:
+                wave_surf = pygame.Surface((rx * 2 + 4, ry * 2 + 4), pygame.SRCALPHA)
+                wave_rect = pygame.Rect(2, 2, rx * 2, ry * 2)
+                wave_color = (255, 235, 170, alpha) if self.style == 'dream' else ((60, 240, 255, alpha) if self.style == 'blueprint' else (160, 255, 140, alpha))
+                pygame.draw.ellipse(wave_surf, wave_color, wave_rect, max(1, int(3 * (1.0 - p) * self.zoom)))
+                surface.blit(wave_surf, (center[0] - rx - 2, center[1] - ry - 2))
         self.stats['material_cache_bytes']=sum(s.get_pitch()*s.get_height() for s in self.material_cache.values())
         self.stats['block_texture_bytes']=sum(s.get_pitch()*s.get_height() for s in self._block_textures.values())
 
@@ -1046,6 +1125,7 @@ class IsometricRenderer:
             p = self.project((r + dr, c + dc, z + dz))
             return (p[0] - ox, p[1] - oy)
 
+        pressed = z < 0.0
         if kind == 'goal':
             hole = [project(-.36, -.36), project(-.36, .36), project(.36, .36), project(.36, -.36)]
             pygame.draw.polygon(surface, (10, 14, 20), hole)
@@ -1085,13 +1165,13 @@ class IsometricRenderer:
 
             # High-contrast dark base ring so it always pops regardless of tile texture
             pygame.draw.polygon(surface, (24, 28, 34), ring_pts)
-            # Illuminated bright gold/amber button
-            btn_color = (250, 182, 58) if not self.high_contrast else (255, 225, 70)
+            # Illuminated bright gold/amber button (glows brighter when depressed)
+            btn_color = (255, 235, 120) if pressed else ((250, 182, 58) if not self.high_contrast else (255, 225, 70))
             pygame.draw.polygon(surface, btn_color, core_pts)
             # Core inner highlight
             pygame.draw.polygon(surface, (255, 248, 224), inner_dot)
             # Anti-aliased outer rim
-            pygame.draw.aalines(surface, (255, 235, 150), True, core_pts)
+            pygame.draw.aalines(surface, (255, 245, 180) if pressed else (255, 235, 150), True, core_pts)
             pygame.draw.aalines(surface, (16, 20, 26), True, ring_pts)
 
         elif kind == 'X':
@@ -1115,11 +1195,11 @@ class IsometricRenderer:
                 project(arm_len, -arm_len + arm_w),
                 project(arm_len - arm_w, -arm_len)
             ]
-            x_color = (235, 56, 44) if not self.high_contrast else (255, 40, 40)
+            x_color = (255, 110, 95) if pressed else ((235, 56, 44) if not self.high_contrast else (255, 40, 40))
             pygame.draw.polygon(surface, x_color, p1)
             pygame.draw.polygon(surface, x_color, p2)
-            pygame.draw.aalines(surface, (255, 185, 175), True, p1)
-            pygame.draw.aalines(surface, (255, 185, 175), True, p2)
+            pygame.draw.aalines(surface, (255, 205, 195) if pressed else (255, 185, 175), True, p1)
+            pygame.draw.aalines(surface, (255, 205, 195) if pressed else (255, 185, 175), True, p2)
             # Center bright rivet
             center_dot = [project(0.06 * cos(i * pi / 8), 0.06 * sin(i * pi / 8)) for i in range(16)]
             pygame.draw.polygon(surface, (255, 255, 255), center_dot)
@@ -1130,7 +1210,7 @@ class IsometricRenderer:
             pygame.draw.polygon(surface, (16, 30, 40), pad)
             pygame.draw.aalines(surface, (38, 88, 110), True, pad)
 
-            cyan = (44, 220, 238)
+            cyan = (140, 255, 255) if pressed else (44, 220, 238)
             c_left = [project(-.22, -.06), project(0, -.26), project(.22, -.06)]
             c_right = [project(-.22, .06), project(0, .26), project(.22, .06)]
             pygame.draw.aalines(surface, cyan, False, c_left)

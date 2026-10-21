@@ -123,15 +123,20 @@ class Button:
 
         # Smooth interactive animation tracking (60fps ease)
         btn_id = f"{self.key}_{self.rect.x}_{self.rect.y}"
-        anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0})
+        anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0, 'ripple': 0.0})
         anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.40
         anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.50
+        if pressed:
+            anim['ripple'] = min(1.0, anim.get('ripple', 0.0) + 0.16)
+        else:
+            anim['ripple'] = max(0.0, anim.get('ripple', 0.0) - 0.08)
         if not hover and anim['hover'] < 0.002:
             anim['hover'] = 0.0
         if not pressed and anim['press'] < 0.002:
             anim['press'] = 0.0
         h_t = anim['hover']
         p_t = anim['press']
+        rip_t = anim['ripple']
 
         # Physical translation: lift up smoothly on hover, depress down on click
         # Breakthrough dynamic floating & swaying micro-animation on hover
@@ -241,6 +246,18 @@ class Button:
                 col_b = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
                 pygame.draw.rect(col_b, quiet_border, col_b.get_rect(), 1, border_radius=radius)
                 surface.blit(col_b, draw_rect)
+
+        # Tactile material click ripple
+        if rip_t > 0.02 and self.enabled:
+            rip_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            rip_r = max(4, int(draw_rect.width * 0.85 * rip_t))
+            rip_alpha = int(75 * (1.0 - rip_t))
+            rip_pos = (mouse_pos[0] - draw_rect.x, mouse_pos[1] - draw_rect.y)
+            pygame.draw.circle(rip_surf, (255, 255, 255, rip_alpha), rip_pos, rip_r)
+            rip_mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(rip_mask, (255, 255, 255, 255), rip_mask.get_rect(), border_radius=radius)
+            rip_surf.blit(rip_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            surface.blit(rip_surf, draw_rect)
 
         if self.selected and self.kind != 'dock_item':
             pygame.draw.rect(surface, theme.ACCENT, draw_rect, 1, border_radius=12)

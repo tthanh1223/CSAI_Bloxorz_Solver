@@ -101,9 +101,14 @@ class BloxorzApp:
         self.pending_action = None
         # Win sequence (manual play only): 'roll' -> 'sink' -> 'choice' (replay or next stage).
         self.win_phase = None
-        self.stage_cleared = False  # survives replaying the winning moves
+        self.stage_cleared: bool = False
         self.intro_t: float | None = None
         self.outro_t: float | None = None
+        self.trauma: float = 0.0
+        self.shockwave: tuple[float, float, float] | None = None
+
+    def add_trauma(self, amount: float):
+        self.trauma = min(1.0, getattr(self, 'trauma', 0.0) + amount)
 
     @property
     def busy(self):
@@ -204,10 +209,23 @@ class BloxorzApp:
         after = self.session.current_state
         if action != Action.SPACE:
             self.play_sfx('roll')
+            if after.orientation != Orientation.STANDING and after.orientation != Orientation.SPLIT:
+                self.add_trauma(0.18)
+            else:
+                self.add_trauma(0.08)
+        else:
+            self.play_sfx('switch')
         if after.bridges_status != before.bridges_status:
             self.play_sfx('switch')
         if after.orientation == Orientation.SPLIT and before.orientation != Orientation.SPLIT:
             self.play_sfx('split')
+            self.add_trauma(0.25)
+        elif before.orientation == Orientation.SPLIT and after.orientation != Orientation.SPLIT:
+            self.play_sfx('split')
+            self.add_trauma(0.35)
+            mid_r = (after.pos1[0] + after.pos2[0]) / 2.0
+            mid_c = (after.pos1[1] + after.pos2[1]) / 2.0
+            self.shockwave = (mid_r, mid_c, 0.0)
         if self.session.status == 'WON':
             self.play_sfx('win')
         self.message = 'Rolling...' if self.animation.busy else 'Move accepted.'
@@ -224,6 +242,7 @@ class BloxorzApp:
         self.solver_status = SolverStatus.IDLE
         self.message = 'You fell off the board!'
         self.play_sfx('fall')
+        self.add_trauma(0.55)
         if self.animate:
             self.animation.duration_sec = self.FALL_SECONDS
             self.animation.start(before, fallen, action, falling=True)
@@ -249,6 +268,7 @@ class BloxorzApp:
             self.animation.duration_sec = self.WIN_SECONDS
             self.animation.start(goal, goal, self.actions[-1], sinking=True)
             self.win_phase = 'sink'
+            self.add_trauma(0.38)
             self.message = 'Stage complete!'
             return
         if self.win_phase == 'sink' and self.animate:
@@ -456,6 +476,12 @@ class BloxorzApp:
 
     def update(self, dt):
         self.animation.update(dt)
+        if getattr(self, 'trauma', 0.0) > 0.0:
+            self.trauma = max(0.0, self.trauma - dt * 2.8)
+        if getattr(self, 'shockwave', None) is not None:
+            r, c, st = self.shockwave
+            st += dt
+            self.shockwave = (r, c, st) if st < 0.35 else None
         if self.intro_t is not None:
             self.intro_t += dt / 0.85
             if self.intro_t >= 1.0:

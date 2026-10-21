@@ -30,7 +30,8 @@ def draw(app):
     hovered = tuple(b.key for b in app.buttons if b.enabled and b.rect.collidepoint(mouse))
     hovered_metrics = tuple(i for i, r in enumerate(getattr(app, 'metric_rects', [])) if r.collidepoint(mouse))
     animating_ui = (bool(hovered) or bool(hovered_metrics) or app.busy
-                    or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None)
+                    or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None
+                    or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None)
     time_tick = (pygame.time.get_ticks() // 16) if animating_ui else 0
     slider_state = (getattr(app, 'bgm_volume', 0.35), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
     ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), app.large_text, app.high_contrast,
@@ -40,7 +41,8 @@ def draw(app):
               app.stage_picker, app.picker_page, app.menu, app.dropdown_open, app.sound_enabled, app.animate,
               bool(app.actions), hovered, hovered_metrics, pygame.mouse.get_pressed(), slider_state,
               time_tick)
-    animating_board = getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
+    animating_board = (getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
+                       or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None)
     board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(app.pan), animating_board)
     cached = getattr(app, '_presentation_cache', None)
     if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
@@ -48,12 +50,19 @@ def draw(app):
             return False
         app.screen.blit(cached[2], (0, 0))
         rect = app.board_rect
+        if getattr(app, 'trauma', 0.0) > 0.01:
+            shake = app.trauma ** 2
+            ticks = pygame.time.get_ticks()
+            shake_x = int(math.sin(ticks * 0.052) * 5.0 * shake)
+            shake_y = int(math.cos(ticks * 0.071) * 3.8 * shake)
+            rect = app.board_rect.move(shake_x, shake_y)
         app.screen.blit(scene(app), rect, rect)
         board = app._board_surface
         app.renderer.zoom, app.renderer.pan = app.zoom, tuple(app.pan)
         app.renderer.high_contrast = app.high_contrast
         app.renderer.draw(board, app.session.current_state, app.animation.frame,
-                          intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None))
+                          intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None),
+                          shockwave=getattr(app, 'shockwave', None))
         app.screen.blit(board, rect)
         if not animating_board:
             app._presentation_cache = (ui_key, board_key, cached[2])
@@ -145,8 +154,16 @@ def _draw(app):
     app.renderer.zoom, app.renderer.pan = app.zoom, tuple(app.pan)
     app.renderer.high_contrast = app.high_contrast
     app.renderer.draw(board, app.session.current_state, app.animation.frame,
-                      intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None))
-    screen.blit(board, app.board_rect)
+                      intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None),
+                      shockwave=getattr(app, 'shockwave', None))
+    draw_rect = app.board_rect
+    if getattr(app, 'trauma', 0.0) > 0.01:
+        shake = app.trauma ** 2
+        ticks = pygame.time.get_ticks()
+        shake_x = int(math.sin(ticks * 0.052) * 5.0 * shake)
+        shake_y = int(math.cos(ticks * 0.071) * 3.8 * shake)
+        draw_rect = app.board_rect.move(shake_x, shake_y)
+    screen.blit(board, draw_rect)
 
     # Right panel background container
     panel = pygame.Surface((T.PANEL_WIDTH + 32, h - 100), pygame.SRCALPHA)
@@ -285,16 +302,16 @@ def _draw(app):
         pygame.draw.aaline(screen, T.ACCENT_HOVER, center, end_pt)
         pygame.draw.circle(screen, T.ACCENT, center, 3)
 
-        # Equalizer Spectrum Bars simulating heuristic exploration
-        for bar_idx in range(5):
+        # 7-bar Harmonic Equalizer Spectrum simulating heuristic exploration
+        for bar_idx in range(7):
             bx = x + 34 + bar_idx * 5
-            bh = 4 + int(abs(math.sin(ticks * 0.007 + bar_idx * 0.95)) * 10)
+            bh = 3 + int(abs(math.sin(ticks * 0.0075 + bar_idx * 0.82)) * 12)
             by = y + 104 - bh // 2
             pygame.draw.rect(screen, T.ACCENT, (bx, by, 3, bh), border_radius=1)
 
         # Trailing animated dots
         dots = '.' * (1 + (ticks // 320) % 3)
-        label(f'Searching state space{dots}', x + 66, y + 94, T.MUTED, max_width=pw - 66)
+        label(f'Searching state space{dots}', x + 76, y + 94, T.MUTED, max_width=pw - 76)
         button('cancel', 'Cancel search', x, y + 152, pw)
     elif app.result and app.result.found:
         m = app.result.metrics
