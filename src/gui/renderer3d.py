@@ -537,8 +537,6 @@ class IsometricRenderer:
         broken: a fragile tile that has just broken; it is left out of the board,
         so it vanishes and the block drops through the hole."""
         self.stats['static_builds']+=1
-        self._base=pygame.Surface(self.size,pygame.SRCALPHA)
-        self._top_mask=pygame.Surface(self.size,pygame.SRCALPHA)
         # Collect active cells to ground the 3D board to the background environment
         active_cells = []
         for r, row in enumerate(self.stage.grid):
@@ -551,6 +549,19 @@ class IsometricRenderer:
                 elif tile != TileType.VOID and coord != broken:
                     active_cells.append(coord)
 
+        # A few recent boards are kept: when a switch is pressed, the board while
+        # the bridge flies in is the same as the board just before, so it is reused.
+        base_key = (id(self.stage), self.size, self.camera, self.zoom, tuple(self.pan), self.high_contrast, self.style, tuple(active_cells))
+        if not hasattr(self, '_base_cache'):
+            self._base_cache = {}
+        cached = self._base_cache.get(base_key)
+        if cached is not None:
+            self._base, self._top_mask, self._shadow_surf, self._tile_sprites = cached
+            self._frame_key = None
+            return
+        self._base=pygame.Surface(self.size,pygame.SRCALPHA)
+        self._top_mask=pygame.Surface(self.size,pygame.SRCALPHA)
+
         # Volumetric under-island ambient drop shadow for all 3 themes
         # Grounds the floating stage, giving realistic depth and weight in mid-air
         shadow_colors = {
@@ -559,24 +570,28 @@ class IsometricRenderer:
             'blueprint': (8, 22, 38, 120),     # Blueprint drafting depth shadow
         }
         shadow_color = shadow_colors.get(self.style, (25, 25, 35, 100))
-        shadow_surf = pygame.Surface(self.size, pygame.SRCALPHA)
-        for r, c in active_cells:
-            fp = [self.project((r + dr, c + dc, -0.58)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-            pygame.draw.polygon(shadow_surf, shadow_color, fp)
-
-        sw, sh = self.size
-        # Pass 1: Broad diffused ambient drop shadow (offset +14px down)
-        tiny1 = pygame.transform.smoothscale(shadow_surf, (max(1, sw // 6), max(1, sh // 6)))
-        soft1 = pygame.transform.smoothscale(tiny1, (sw, sh))
-
-        # Pass 2: Closer contact drop shadow (offset +6px down)
-        tiny2 = pygame.transform.smoothscale(shadow_surf, (max(1, sw // 3), max(1, sh // 3)))
-        soft2 = pygame.transform.smoothscale(tiny2, (sw, sh))
-
+        footprints = [[self.project((r + dr, c + dc, -0.58)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
+                      for r, c in active_cells]
         self._shadow_surf = pygame.Surface(self.size, pygame.SRCALPHA)
-        self._shadow_surf.blit(soft1, (0, 14))
-        self._shadow_surf.blit(soft2, (0, 6))
-        self._base.blit(self._shadow_surf, (0, 0))
+        # Two blur passes (scale down, then back up): a broad diffused shadow
+        # (+14px down) and a closer contact shadow (+6px). Only the board's own
+        # area (plus the blur margin) is processed, not the whole viewport.
+        region = pygame.Rect(0, 0, 0, 0)
+        if footprints:
+            xs = [x for fp in footprints for x, _ in fp];ys = [y for fp in footprints for _, y in fp]
+            margin = 48 * self.pixel_scale
+            region = pygame.Rect(floor(min(xs)) - margin, floor(min(ys)) - margin,
+                                 ceil(max(xs) - min(xs)) + 2 * margin, ceil(max(ys) - min(ys)) + 2 * margin + 14)
+            region = region.clip(self._shadow_surf.get_rect())
+        if region.width and region.height:
+            sharp = pygame.Surface(region.size, pygame.SRCALPHA)
+            for fp in footprints:
+                pygame.draw.polygon(sharp, shadow_color, [(x - region.x, y - region.y) for x, y in fp])
+            for divisor, offset in ((6, 14), (3, 6)):
+                small = pygame.transform.smoothscale(sharp, (max(1, region.w // divisor), max(1, region.h // divisor)))
+                self._shadow_surf.blit(pygame.transform.smoothscale(small, region.size), (region.x, region.y + offset))
+            area = region.inflate(0, 28).clip(self._shadow_surf.get_rect())  # include the +14px offset
+            self._base.blit(self._shadow_surf, area.topleft, area)
 
         if self.style == 'blueprint':
             # Blueprint datum floor footprint & architectural projection lines
@@ -598,127 +613,94 @@ class IsometricRenderer:
                         pa = (top_p[0] + (bot_p[0] - top_p[0]) * t1, top_p[1] + (bot_p[1] - top_p[1]) * t1)
                         pb = (top_p[0] + (bot_p[0] - top_p[0]) * t2, top_p[1] + (bot_p[1] - top_p[1]) * t2)
                         pygame.draw.line(self._base, (64, 168, 196, 75), pa, pb, 1)
-        commands=[]
-        holes=[]
-        tile_outlines=[]
-        for r,row in enumerate(self.stage.grid):
-            for c,tile in enumerate(row):
-                coord=(r,c);bridge=self.bridge_cells.get(coord)
-                if bridge is not None:
-                    # A closed bridge is not drawn at all, so the player cannot see it coming.
-                    if bridge in changing_bridges or bridge>=len(shown.bridges_status) or not shown.bridges_status[bridge]:
-                        continue
-                    # Open resting bridge tile: styled identically to the player block cuboid
-                    top=[self.project(p) for p in cuboid(r+.012,c+.012,0,.976,.976,0)[:4]]
-                    tile_outlines.append(top)
-                    pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
-                    vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.32,.976,.976,.32),.02)
-                    for depth,pts,ink,edge in self._faces(vertices,self.BLOCK,faces=indices,player=True):
-                        commands.append((depth,'bridge_face',(pts,ink,edge)))
-                    label='goal' if coord==self.stage.goal else ''
-                    if coord in self.stage.switches:
-                        label={'SOFT':'O','HEAVY':'X','SPLIT':'<>'}[self.stage.switches[coord].type.value]
-                    if label:commands.append((self.camera.depth(r+.5,c+.5,0)+.001,'marker',((r+.5,c+.5,.01),label)))
-                    continue
-                elif tile==TileType.VOID or coord==broken:continue
-                g,thick=TILE_GAP,tile_thickness(self.camera.view)
-                top=[self.project(p) for p in cuboid(r+g,c+g,0,1-2*g,1-2*g,0)[:4]]
-                tile_outlines.append(top)
-                pygame.draw.polygon(self._top_mask,(255,255,255,255),top)
-                color=(178,200,193) if self.high_contrast else self.FLOOR
-                if tile==TileType.FRAGILE:color=self.FRAGILE
-                vertices,indices=bevel_mesh(cuboid(r+.012,c+.012,-.32,.976,.976,.32),.02)
-                for depth,pts,ink,edge in self._faces(vertices,color,faces=indices):
-                    commands.append((depth,'face',(pts,ink)))
-                label='goal' if coord==self.stage.goal else '!' if tile==TileType.FRAGILE else ''
-                if coord in self.stage.switches:
-                    label={'SOFT':'O','HEAVY':'X','SPLIT':'<>'}[self.stage.switches[coord].type.value]
-                if label:commands.append((self.camera.depth(r+.5,c+.5,0)+.001,'marker',((r+.5,c+.5,.01),label)))
-                if coord==self.stage.goal:
-                    holes.append([self.project(p) for p in cuboid(r+.16,c+.16,0,.68,.68,0)[:4]])
-        for hole in holes:pygame.draw.polygon(self._top_mask,(0,0,0,0),hole)
-        for _,kind,payload in sorted(commands,key=lambda item:item[0]):
-            if kind=='face':
-                pts,ink=payload
-                if len(pts)==4:self._material(self._base,pts,ink)
-                else:pygame.draw.polygon(self._base,ink,pts)
-            elif kind=='bridge_face':
-                pts,ink,edge=payload
-                self._block_face(self._base,pts,ink,edge)
-            elif kind=='marker':self._marker(self._base,*payload)
-            else:pygame.draw.aalines(self._base,(139,105,123),True,payload)
-        seam = {'dream': (202, 178, 184), 'blueprint': (48, 112, 140), 'forest': (102, 112, 80)}.get(self.style, (168, 174, 163))
-        seams = pygame.Surface(self.size, pygame.SRCALPHA)
-        for outline in tile_outlines:
-            pygame.draw.aalines(seams, (*seam, 165), True, outline)
-        self._base.blit(seams, (0, 0))
-        if self.style == 'forest':
-            self._moss_edges(shown)
 
-        # Pre-render individual tile sprites for 60 FPS lag-free assembly and disassembly
-        self._tile_sprites = []
+        # The board is composed from per-tile sprites (see _tile_sprite). They are
+        # cached per camera, so toggling a bridge or breaking a tile only re-blits
+        # sprites instead of re-projecting and re-texturing every tile, which made
+        # the bridge animation stutter. The same sprites drive the assembly intro.
         grid = self.stage.grid
         r_mid = len(grid) / 2.0
         c_mid = len(grid[0]) / 2.0
         max_d = max(1.0, (r_mid ** 2 + c_mid ** 2) ** 0.5)
-        for r, row in enumerate(self.stage.grid):
-            for c, tile in enumerate(row):
-                coord = (r, c)
-                bridge = self.bridge_cells.get(coord)
-                if bridge is not None:
-                    if bridge in changing_bridges or bridge >= len(shown.bridges_status) or not shown.bridges_status[bridge]:
-                        continue
-                    color = self.BLOCK
-                    vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
-                    t_faces = self._faces(vertices, color, faces=indices, player=True)
-                elif tile == TileType.VOID or coord == broken:
-                    continue
-                else:
-                    color = (178, 200, 193) if self.high_contrast else self.FLOOR
-                    if tile == TileType.FRAGILE:
-                        color = self.FRAGILE
-                    vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
-                    t_faces = self._faces(vertices, color, faces=indices)
-                top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
-                all_pts = [p for _, pts, _, _ in t_faces for p in pts] + top
-                min_x = floor(min(p[0] for p in all_pts)) - 2
-                max_x = ceil(max(p[0] for p in all_pts)) + 2
-                min_y = floor(min(p[1] for p in all_pts)) - 2
-                max_y = ceil(max(p[1] for p in all_pts)) + 2
-                spr_w = max(4, max_x - min_x + 1)
-                spr_h = max(4, max_y - min_y + 1)
-                tile_surf = pygame.Surface((spr_w, spr_h), pygame.SRCALPHA)
-                if bridge is not None:
-                    for depth, pts, ink, edge in sorted(t_faces, key=lambda it: it[0]):
-                        local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
-                        self._block_face(tile_surf, local_pts, ink, edge)
-                else:
-                    for depth, pts, ink, edge in sorted(t_faces, key=lambda it: it[0]):
-                        local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
-                        if len(local_pts) == 4:
-                            self._material(tile_surf, local_pts, ink)
-                        else:
-                            pygame.draw.polygon(tile_surf, ink, local_pts)
-                local_top = [(p[0] - min_x, p[1] - min_y) for p in top]
-                pygame.draw.aalines(tile_surf, (*seam, 165), True, local_top)
-                label = 'goal' if coord == self.stage.goal else '!' if tile == TileType.FRAGILE else ''
-                if coord in self.stage.switches:
-                    label = {'SOFT': 'O', 'HEAVY': 'X', 'SPLIT': '<>'}[self.stage.switches[coord].type.value]
-                if label:
-                    self._marker(tile_surf, (r + .5, c + .5, .01), label, offset=(min_x, min_y))
-                tile_depth = self.camera.depth(r + .5, c + .5, 0)
-                d = ((r - r_mid) ** 2 + (c - c_mid) ** 2) ** 0.5
-                delay = (d / max_d) * 0.22
-                seed = r * 137 + c * 89
-                theta_base = (seed % 360) * pi / 180.0 + (seed % 5) * 0.3
-                radius_base = 160.0 + (seed % 8) * 20.0
-                self._tile_sprites.append((tile_depth, tile_surf, (min_x, min_y), (r, c), delay, theta_base, radius_base))
-
+        self._tile_sprites = []
+        for r, c in active_cells:
+            tile_surf, (min_x, min_y), tile_depth = self._tile_sprite(r, c)
+            d = ((r - r_mid) ** 2 + (c - c_mid) ** 2) ** 0.5
+            delay = (d / max_d) * 0.22
+            seed = r * 137 + c * 89
+            theta_base = (seed % 360) * pi / 180.0 + (seed % 5) * 0.3
+            radius_base = 160.0 + (seed % 8) * 20.0
+            self._tile_sprites.append((tile_depth, tile_surf, (min_x, min_y), (r, c), delay, theta_base, radius_base))
         self._tile_sprites.sort(key=lambda it: it[0])
-        # Retain a bounded number of full-size buffers, never one per state.
-        self._frame=pygame.Surface(self.size,pygame.SRCALPHA)
+        for _, tile_surf, position, _, _, _, _ in self._tile_sprites:
+            self._base.blit(tile_surf, position)
+        for r, c in active_cells:
+            top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
+            pygame.draw.polygon(self._top_mask, (255, 255, 255, 255), top)
+        if self.stage.goal in active_cells:
+            r, c = self.stage.goal
+            pygame.draw.polygon(self._top_mask, (0, 0, 0, 0), [self.project(p) for p in cuboid(r + .16, c + .16, 0, .68, .68, 0)[:4]])
+        if self.style == 'forest':
+            self._moss_edges(shown)
+        # Bridge tiles are drawn ahead of time, so the frame a bridge settles on
+        # only re-blits sprites.
+        for r, c in self.bridge_cells:
+            self._tile_sprite(r, c)
+        if len(self._base_cache) >= 4:  # bounded: a handful of full-size layers
+            self._base_cache.pop(next(iter(self._base_cache)))
+        self._base_cache[base_key] = (self._base, self._top_mask, self._shadow_surf, self._tile_sprites)
+        if self._frame.get_size() != self.size:
+            self._frame=pygame.Surface(self.size,pygame.SRCALPHA)
         self._frame_key=None
         self.stats['cached_layer_bytes']=self.size[0]*self.size[1]*4*3
+
+    def _tile_sprite(self, r, c):
+        """One floor or open-bridge tile, drawn once per camera and then reused.
+
+        Returns (surface, top-left screen position, painter depth)."""
+        key = (id(self.stage), self.size, self.camera, self.zoom, tuple(self.pan), self.high_contrast, self.style)
+        if getattr(self, '_tile_sprite_key', None) != key:
+            self._tile_sprite_cache = {}
+            self._tile_sprite_key = key
+        cached = self._tile_sprite_cache.get((r, c))
+        if cached is not None:
+            return cached
+        coord = (r, c)
+        tile = self.stage.grid[r][c]
+        bridge = self.bridge_cells.get(coord)
+        vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
+        if bridge is not None:  # open bridge tile: styled like the player block
+            t_faces = self._faces(vertices, self.BLOCK, faces=indices, player=True)
+        else:
+            color = (178, 200, 193) if self.high_contrast else self.FLOOR
+            if tile == TileType.FRAGILE:
+                color = self.FRAGILE
+            t_faces = self._faces(vertices, color, faces=indices)
+        top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
+        all_pts = [p for _, pts, _, _ in t_faces for p in pts] + top
+        min_x = floor(min(p[0] for p in all_pts)) - 2
+        max_x = ceil(max(p[0] for p in all_pts)) + 2
+        min_y = floor(min(p[1] for p in all_pts)) - 2
+        max_y = ceil(max(p[1] for p in all_pts)) + 2
+        tile_surf = pygame.Surface((max(4, max_x - min_x + 1), max(4, max_y - min_y + 1)), pygame.SRCALPHA)
+        for _, pts, ink, edge in sorted(t_faces, key=lambda it: it[0]):
+            local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
+            if bridge is not None:
+                self._block_face(tile_surf, local_pts, ink, edge)
+            elif len(local_pts) == 4:
+                self._material(tile_surf, local_pts, ink)
+            else:
+                pygame.draw.polygon(tile_surf, ink, local_pts)
+        seam = {'dream': (202, 178, 184), 'blueprint': (48, 112, 140), 'forest': (102, 112, 80)}.get(self.style, (168, 174, 163))
+        pygame.draw.aalines(tile_surf, (*seam, 165), True, [(p[0] - min_x, p[1] - min_y) for p in top])
+        label = 'goal' if coord == self.stage.goal else '!' if tile == TileType.FRAGILE and bridge is None else ''
+        if coord in self.stage.switches:
+            label = {'SOFT': 'O', 'HEAVY': 'X', 'SPLIT': '<>'}[self.stage.switches[coord].type.value]
+        if label:
+            self._marker(tile_surf, (r + .5, c + .5, .01), label, offset=(min_x, min_y))
+        result = (tile_surf, (min_x, min_y), self.camera.depth(r + .5, c + .5, 0))
+        self._tile_sprite_cache[coord] = result
+        return result
 
     def _supported(self, cell, bridges_status) -> bool:
         """A tile (not void / outside / closed bridge) is under this cell."""
