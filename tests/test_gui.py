@@ -483,8 +483,10 @@ def test_manual_win_sinks_then_offers_next_stage():
     for _ in range(15):
         app.update(.02)
     assert app.win_phase == 'sink' and app.animation.frame.sinking
-    for _ in range(60):
+    for _ in range(200):
         app.update(.02)
+        if app.win_phase == 'choice':
+            break
     # Waits for the player instead of loading the next stage by itself.
     assert app.win_phase == 'choice' and app.stage_index == 0 and app.session.status == 'WON'
     app.undo()
@@ -497,8 +499,10 @@ def test_manual_win_sinks_then_offers_next_stage():
 def test_manual_win_replay_returns_to_choice():
     app = app_fixture()
     path = win_manually(app)
-    for _ in range(80):
+    for _ in range(200):
         app.update(.02)
+        if app.win_phase == 'choice':
+            break
     assert app.win_phase == 'choice'
     app.command('win_replay')
     assert app.replay.status == ReplayStatus.PLAYING and app.win_phase is None
@@ -553,3 +557,124 @@ def test_fragile_tile_breaks_when_block_stands_on_it():
     renderer.draw(surface, before, MotionFrame(before, fallen, Action.RIGHT, .6, True))
     assert renderer._static_key[-1] == (5, 9)  # the board is rebuilt without it
     pygame.quit()
+
+
+def test_switch_press_rolls_at_normal_speed_then_bridge_flies():
+    import collections
+    pygame.init()
+    app = app_fixture()
+    app.select_stage(1)  # stage 02: a soft switch opens a bridge
+    problem, start = app.session.problem, app.session.current_state
+    previous, queue, goal = {start: None}, collections.deque([start]), None
+    while queue and goal is None:
+        state = queue.popleft()
+        for action, nxt, _ in problem.get_successors(state):
+            if nxt in previous:
+                continue
+            previous[nxt] = (state, action)
+            if nxt.bridges_status != state.bridges_status:
+                goal = nxt
+                break
+            queue.append(nxt)
+    path, node = [], goal
+    while previous[node]:
+        node, action = previous[node]
+        path.append(action)
+    path.reverse()
+    for action in path[:-1]:
+        assert app.apply_action(action)
+        while app.animation.busy:
+            app.update(.01)
+    assert app.apply_action(path[-1])
+    # The roll that presses the switch is as fast as any other roll.
+    assert abs(app.animation.duration_sec - app.ROLL_SECONDS) < 1e-9
+    assert app.bridge_fx is None  # the bridge waits for the block to land...
+    queued = app.bridge_view()
+    assert queued is not None and queued[2] == 0.0  # ...and is shown at its starting pose
+    changed = [i for i, (a, b) in enumerate(zip(queued[0], queued[1])) if a != b]
+    bridge_cells = {cell for cell, i in app.renderer.bridge_cells.items() if i in changed}
+    surface = pygame.Surface((830, 630), pygame.SRCALPHA)
+    app.update(app.ROLL_SECONDS * .8)  # past the point where the board used to switch over
+    app.renderer.draw(surface, app.session.current_state, app.animation.frame, bridges=app.bridge_view())
+    on_board = {cell for _, _, _, cell, *_ in app.renderer._tile_sprites}
+    assert bridge_cells and not bridge_cells & on_board  # no early pop-in of the new bridge
+    rolled = app.ROLL_SECONDS * .8
+    while app.animation.busy:
+        app.update(.01)
+        rolled += .01
+    assert rolled <= app.ROLL_SECONDS + .02
+    old, new, progress = app.bridge_fx
+    assert old != new and progress == 0.0
+    surface = pygame.Surface((830, 630), pygame.SRCALPHA)
+    flown = 0.0
+    while app.bridge_fx is not None:
+        app.renderer.draw(surface, app.session.current_state, app.animation.frame, bridges=app.bridge_fx)
+        app.update(.02)
+        flown += .02
+    assert abs(flown - app.BRIDGE_SECONDS) < .05
+    # The block can move again right away; the bridge never blocks input.
+    app.undo()
+    assert app.bridge_fx is None and app.session.current_state.bridges_status == old
+    pygame.quit()
+
+
+def test_win_sequence_draws_every_frame_and_board_stays_gone():
+    """Draw the whole win sequence (sink, falling tiles, dialog) like the game
+    does, on a 1x screen and through the Retina present() path."""
+    pygame.init()
+
+    class RetinaWindow:  # a 2x window surface, like a MacBook screen
+        def __init__(self, size):
+            self.size, self.surface = size, pygame.Surface((size[0] * 2, size[1] * 2))
+
+        def get_surface(self):
+            return self.surface
+
+        def flip(self):
+            pass
+
+    for retina in (False, True):
+        app = app_fixture()
+        app.screen = pygame.Surface((1180, 742))
+        if retina:
+            app.window, app.hidpi = RetinaWindow((1180, 742)), 2
+        win_manually(app)
+        phases = []
+        for _ in range(400):
+            app.update(1 / 60)
+            if app.draw() and retina:
+                app.present()
+            phases.append(app.win_phase)
+            if app.win_phase == 'choice':
+                break
+        assert {'sink', 'disassemble', 'choice'} <= set(phases)
+        # The block sank and the tiles fell away: nothing comes back up.
+        assert app.board_outro() == 1.0
+        frame = pygame.Surface((830, 630), pygame.SRCALPHA)
+        app.renderer.draw(frame, app.session.current_state, None, outro_t=app.board_outro())
+        assert frame.get_bounding_rect().width == 0  # an empty board
+        app.command('next_stage')
+        assert app.board_outro() is None and app.stage_index == 1
+    pygame.quit()
+
+
+def test_frame_pacer_targets_even_60_fps():
+    from src.gui.app import FramePacer
+    # 60 FPS on 60/120/240 Hz screens (every frame shows for the same number of
+    # refreshes); 72 FPS on 144 Hz.
+    assert abs(FramePacer(60).frame_s - 1 / 60) < 1e-9
+    assert abs(FramePacer(120).frame_s - 1 / 60) < 1e-9
+    assert abs(FramePacer(240).frame_s - 1 / 60) < 1e-9
+    assert abs(FramePacer(144).frame_s - 1 / 72) < 1e-9
+    assert abs(FramePacer(0).frame_s - 1 / 60) < 1e-9  # unknown rate
+
+    class Window:
+        flips = 0
+
+        def flip(self):
+            self.flips += 1
+
+    pacer, window = FramePacer(120), Window()
+    pacer.wait_and_flip(window, drew=True)
+    pacer.wait_and_flip(window, drew=False)  # nothing new: wait, but do not flip
+    assert window.flips == 1

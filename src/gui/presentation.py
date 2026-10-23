@@ -59,6 +59,7 @@ def draw(app):
               time_tick)
     animating_idle_beacon = (app.animation.frame is None and not bool(app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice' or getattr(app, 'in_main_menu', False)))
     animating_board = (getattr(app, 'intro_t', None) is not None or getattr(app, 'outro_t', None) is not None
+                       or (hasattr(app, 'bridge_view') and app.bridge_view() is not None)
                        or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
                        or is_split or animating_idle_beacon or drawer_animating)
     eff_pan = (app.pan[0] + getattr(app, 'camera_pan_x', 0.0), app.pan[1])
@@ -84,8 +85,8 @@ def draw(app):
         app.renderer.high_contrast = app.high_contrast
         app.renderer.pixel_scale = 1
         app.renderer.draw(board, app.session.current_state, app.animation.frame,
-                          intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None),
-                          shockwave=getattr(app, 'shockwave', None))
+                          intro_t=getattr(app, 'intro_t', None), outro_t=app.board_outro() if hasattr(app, 'board_outro') else None,
+                          shockwave=getattr(app, 'shockwave', None), bridges=app.bridge_view() if hasattr(app, 'bridge_view') else None)
         app.screen.blit(board, rect)
         if not animating_board:
             app._presentation_cache = (ui_key, board_key, cached[2])
@@ -418,8 +419,8 @@ def _draw(app):
     if not sharp_board(app):
         app.renderer.pixel_scale = 1
         app.renderer.draw(board, app.session.current_state, app.animation.frame,
-                          intro_t=getattr(app, 'intro_t', None), outro_t=getattr(app, 'outro_t', None),
-                          shockwave=getattr(app, 'shockwave', None))
+                          intro_t=getattr(app, 'intro_t', None), outro_t=app.board_outro() if hasattr(app, 'board_outro') else None,
+                          shockwave=getattr(app, 'shockwave', None), bridges=app.bridge_view() if hasattr(app, 'bridge_view') else None)
         draw_rect = app.board_rect
         if getattr(app, 'trauma', 0.0) > 0.01:
             intensity = app.trauma ** 1.5
