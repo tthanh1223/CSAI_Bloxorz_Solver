@@ -109,6 +109,11 @@ class BloxorzApp:
         self.outro_t: float | None = None
         self.trauma: float = 0.0
         self.shockwave: tuple[float, float, float] | None = None
+        self.in_main_menu: bool = False
+        self.solver_open: bool = False
+        self.drawer_t: float = 0.0
+        self.camera_pan_x: float = 0.0
+        self.menu_t: float = 0.0
 
     def add_trauma(self, amount: float):
         self.trauma = min(1.0, getattr(self, 'trauma', 0.0) + amount)
@@ -171,6 +176,8 @@ class BloxorzApp:
         self.renderer.set_stage(stage)
         self.zoom, self.pan = 1.0, [0, 0]
         self.stage_picker = False
+        self.in_main_menu = False
+        self.menu = None
         self.message = 'Stage loaded. Arrow keys / WASD to roll.'
         if self.animate:
             self.intro_t = 0.0
@@ -321,6 +328,9 @@ class BloxorzApp:
             return
         self.active_request = request.request_id
         self.hint_mode = hint
+        if not hint:
+            self.solver_open = True
+            self.details_open = True
         self.result = None
         self.solver_status = SolverStatus.RUNNING
         self.message = 'Finding a hint...' if hint else 'Searching (30 second limit)...'
@@ -516,17 +526,50 @@ class BloxorzApp:
             if self.wait <= 0:
                 self.replay_step()
                 self.wait = 0.12 / self.speed
+        target_drawer = 1.0 if self.solver_open else 0.0
+        self.drawer_t += (target_drawer - self.drawer_t) * min(1.0, dt * 11.0)
+        target_cam = -160.0 * self.drawer_t
+        self.camera_pan_x += (target_cam - self.camera_pan_x) * min(1.0, dt * 11.0)
+        target_menu = 1.0 if self.in_main_menu else 0.0
+        self.menu_t += (target_menu - self.menu_t) * min(1.0, dt * 9.0)
+
         if (self.session.status == 'WON' and self.win_phase is None and not self.animation.busy
                 and not self.busy and self.replay.status != ReplayStatus.EMPTY):
             self.message = ('Replay finished. Exit replay to continue.' if self.stage_cleared
                             else 'Stage complete. Choose another stage above.')
 
     def handle_key(self, key):
+        if self.in_main_menu:
+            if key in (pygame.K_RETURN, pygame.K_SPACE):
+                self.command('continue_game')
+                return
+            if key == pygame.K_ESCAPE:
+                self.command('continue_game')
+                return
+            if key == pygame.K_n:
+                self.command('new_game')
+                return
+            if key == pygame.K_s:
+                self.command('choose')
+                return
+            if key == pygame.K_t:
+                self.command('theme')
+                return
+            return
         if self.stage_picker or self.menu or self.dropdown_open:
             if key == pygame.K_ESCAPE:
                 self.stage_picker = False
                 self.menu = None
                 self.dropdown_open = False
+            return
+        if key == pygame.K_TAB:
+            self.command('toggle_solver')
+            return
+        if key == pygame.K_ESCAPE:
+            if self.solver_open:
+                self.command('close_solver')
+            else:
+                self.command('main_menu')
             return
         shortcuts = {pygame.K_r: 'restart', pygame.K_z: 'undo', pygame.K_p: 'play',
                      pygame.K_F5: 'save', pygame.K_F9: 'load', pygame.K_PERIOD: 'step',
@@ -549,6 +592,28 @@ class BloxorzApp:
             else:self.apply_action(mapping[key])
 
     def command(self, key):
+        if key == 'main_menu':
+            self.in_main_menu = not self.in_main_menu
+            self.solver_open = False
+            self.menu = None
+            self.stage_picker = False
+            return
+        if key == 'new_game':
+            self.in_main_menu = False
+            self.select_stage(0)
+            self.restart()
+            return
+        if key == 'continue_game':
+            self.in_main_menu = False
+            return
+        if key == 'toggle_solver':
+            self.solver_open = not self.solver_open
+            if self.solver_open:
+                self.details_open = True
+            return
+        if key == 'close_solver':
+            self.solver_open = False
+            return
         if key == 'theme':
             from src.gui.themes import cycle_theme
             cycle_theme(self)
@@ -564,6 +629,7 @@ class BloxorzApp:
             self.stage_picker = False
             return
         if key == 'algorithm_menu':
+            self.solver_open = True
             self.dropdown_open = not self.dropdown_open
             return
         if key in ('source_start', 'source_current'):
@@ -584,6 +650,10 @@ class BloxorzApp:
             self.menu = None
         if key.startswith('stage:'):
             self.select_stage(int(key.split(':')[1]))
+            self.in_main_menu = False
+            self.stage_picker = False
+            self.menu = None
+            return
         elif key == 'choose':
             self.stage_picker = not self.stage_picker
             self.picker_page = self.stage_index // 20
@@ -597,7 +667,12 @@ class BloxorzApp:
         elif key == 'win_replay' and self.actions and not self.busy: self.replay_win()
         elif key == 'restart': self.restart()
         elif key == 'undo': self.undo()
-        elif key == 'solve': self.solve()
+        elif key == 'solve':
+            if not self.solver_open:
+                self.solver_open = True
+                self.details_open = True
+            else:
+                self.solve()
         elif key == 'hint': self.solve(True)
         elif key == 'cancel' and self.busy:
             self.gateway.cancel(self.active_request)
@@ -685,7 +760,7 @@ class BloxorzApp:
                                round(self.board_rect.w * scale), round(self.board_rect.h * scale))
             if self._hi_board is None or self._hi_board.get_size() != rect.size:
                 self._hi_board = pygame.Surface(rect.size, pygame.SRCALPHA)
-            self.renderer.zoom, self.renderer.pan = self.zoom, (self.pan[0] * scale, self.pan[1] * scale)
+            self.renderer.zoom, self.renderer.pan = self.zoom, ((self.pan[0] + getattr(self, 'camera_pan_x', 0.0)) * scale, self.pan[1] * scale)
             self.renderer.pixel_scale = scale
             self.renderer.draw(self._hi_board, self.session.current_state, self.animation.frame)
             hi.blit(self._hi_board, rect)
@@ -776,8 +851,7 @@ class BloxorzApp:
             while running:
                 dt = min(clock.tick(60) / 1000, 0.1)
                 for event in pygame.event.get():
-                    if event.type in (pygame.QUIT, pygame.WINDOWCLOSE) or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open
-                                                                                                                or self.win_phase == 'choice')):
+                    if event.type in (pygame.QUIT, pygame.WINDOWCLOSE):
                         running = False
                     else:
                         self.handle_event(event)

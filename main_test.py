@@ -68,6 +68,7 @@ def main() -> None:
     app = BloxorzApp(session, stage_paths)
     from src.gui.themes import apply_theme
     apply_theme(app,args.theme)
+    app.in_main_menu = True
     if args.forest:
         from src.gui.forest import enable_forest
         enable_forest(app)
