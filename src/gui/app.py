@@ -1,6 +1,9 @@
 """GUI orchestration: engine is the only source of game rules."""
 from __future__ import annotations
+import collections
 import json
+import math
+import time
 from pathlib import Path
 import pygame
 from src.engine.loader import load_stage
@@ -45,10 +48,50 @@ def read_state(data):
     return state
 
 
+class FramePacer:
+    """Show frames at an even rate, in step with the display's refresh.
+
+    On macOS window.flip() waits for the next screen refresh. A ProMotion
+    screen refreshes at 120 Hz, more often than a frame can be drawn while
+    things move (~7-10 ms), so frames would alternate between one and two
+    refreshes and motion looks jerky. Instead every frame gets the same number
+    of refreshes (60 FPS on 120 Hz): before flipping we wait until just before
+    the right refresh. Where flip does not wait (no vsync), the same deadline
+    simply paces frames by the clock.
+    """
+
+    def __init__(self, refresh_hz=60):
+        refresh_hz = refresh_hz if refresh_hz and refresh_hz > 0 else 60
+        self.frame_s = max(1, int(refresh_hz) // 55) / refresh_hz  # 60 FPS on 60/120/240 Hz
+        self.flip_waits = collections.deque(maxlen=30)
+        self.last_flip = time.perf_counter()
+
+    def wait_and_flip(self, window, drew=True):
+        waits = sorted(self.flip_waits)
+        vsync = len(waits) >= 10 and waits[len(waits) // 2] > .0005
+        # With vsync aim just before the refresh we want; flip then waits for it.
+        deadline = self.last_flip + self.frame_s - (.002 if vsync else 0.0)
+        remaining = deadline - time.perf_counter()
+        if remaining > .002:
+            time.sleep(remaining - .0015)  # coarse sleep, then spin for precision
+        while time.perf_counter() < deadline:
+            pass
+        if drew:
+            start = time.perf_counter()
+            window.flip()
+            self.last_flip = time.perf_counter()
+            self.flip_waits.append(self.last_flip - start)
+        else:
+            self.last_flip = max(deadline, time.perf_counter())
+
+
 class BloxorzApp:
     WINDOW_SIZE = (1080, 620)
     FALL_SECONDS = 0.9  # roll to the edge, tip over and drop, then restart
-    WIN_SECONDS = 0.8   # sink into the goal hole, then load the next stage
+    ROLL_SECONDS = 0.18   # one roll; the same with or without a switch press
+    BRIDGE_SECONDS = 0.45  # a switch's bridges fly in / shatter, after the block lands
+    WIN_SECONDS = 0.7   # the block sinks into the goal hole
+    OUTRO_SECONDS = 0.9  # then the tiles fall away, rippling out from the goal
 
     def __init__(self, session, stage_paths=None, gateway=None):
         self.session = session
@@ -97,6 +140,9 @@ class BloxorzApp:
         self.window = None  # run(): HiDPI window; its surface may be 2x the screen
         self.hidpi = 1
         self._hi_base = self._hi_board = None
+        self._hi_ui_shown = None  # UI frame last copied in full to the window (see present())
+        self.bridge_fx = None  # (old bridges, new bridges, progress) while bridges animate
+        self._queued_bridges = None  # set by a switch press, started when the roll lands
         self.buttons = []
         self.seek_rect = pygame.Rect(0, 0, 0, 0)
         self.board_rect = pygame.Rect(0, 0, 1, 1)
@@ -107,6 +153,7 @@ class BloxorzApp:
         self.stage_cleared: bool = False
         self.intro_t: float | None = None
         self.outro_t: float | None = None
+        self.board_cleared = False  # see board_outro()
         self.trauma: float = 0.0
         self.shockwave: tuple[float, float, float] | None = None
 
@@ -151,6 +198,8 @@ class BloxorzApp:
 
     def new_session(self, state):
         self.win_phase = None  # any reload/restart/replay cancels the win sequence
+        self.bridge_fx = self._queued_bridges = None  # bridges are shown as they are
+        self.board_cleared = False  # True once a won stage's board has fallen away
         self.session = GameSession(BloxorzProblem(self.stage, state))
         if self.session.problem.is_goal(state):
             self.session.status = 'WON'
@@ -202,11 +251,12 @@ class BloxorzApp:
         self.actions.append(action)
         self.session.moves = sum(a != Action.SPACE for a in self.actions)
         if self.animate:
-            if self.session.current_state.bridges_status != before.bridges_status:
-                self.animation.duration_sec = 0.32 / self.speed
-            else:
-                self.animation.duration_sec = 0.18 / self.speed
+            # The block always rolls at its normal speed. If this roll presses a
+            # switch, the bridge animation starts once the block lands (update()).
+            self.animation.duration_sec = self.ROLL_SECONDS / self.speed
             self.animation.start(before, self.session.current_state, action)
+            if self.session.current_state.bridges_status != before.bridges_status:
+                self._queued_bridges = (before.bridges_status, self.session.current_state.bridges_status)
         self.result = self.result if replay else None
         if not replay:
             self.solver_status = SolverStatus.IDLE
@@ -302,6 +352,7 @@ class BloxorzApp:
             self.message = 'No move to undo.'
             return
         self.session.undo()
+        self.bridge_fx = self._queued_bridges = None
         self.actions.pop()
         self.session.moves = sum(a != Action.SPACE for a in self.actions)
         self.result = None
@@ -475,6 +526,14 @@ class BloxorzApp:
 
     def update(self, dt):
         self.animation.update(dt)
+        # Bridge timeline: (old status, new status, progress 0..1), independent of rolls.
+        if self.bridge_fx is not None:
+            old, new, progress = self.bridge_fx
+            progress += dt * self.speed / self.BRIDGE_SECONDS
+            self.bridge_fx = (old, new, progress) if progress < 1 else None
+        if self._queued_bridges is not None and not self.animation.busy:
+            self.bridge_fx = (*self._queued_bridges, 0.0)
+            self._queued_bridges = None
         if getattr(self, 'trauma', 0.0) > 0.0:
             self.trauma = max(0.0, self.trauma - dt * 1.8)
         if getattr(self, 'shockwave', None) is not None:
@@ -487,9 +546,10 @@ class BloxorzApp:
                 self.intro_t = None
                 self._presentation_cache = None
         if self.win_phase == 'disassemble' and self.outro_t is not None:
-            self.outro_t += dt / 0.50
+            self.outro_t += dt / self.OUTRO_SECONDS
             if self.outro_t >= 1.0:
                 self.outro_t = None
+                self.board_cleared = True  # the block and tiles stay gone behind the dialog
                 self.win_phase = 'choice'
                 self.stage_cleared = True
                 self.message = 'Stage complete!'
@@ -663,40 +723,80 @@ class BloxorzApp:
     def draw(self):
         return draw_presentation(self)
 
-    def present(self):
-        """Show the last drawn frame in the window.
+    def board_outro(self):
+        """Progress of the win outro for the renderer: running, 1.0 once the board
+        has fallen away (it stays empty until the player moves on), else None."""
+        if self.outro_t is not None:
+            return self.outro_t
+        return 1.0 if self.board_cleared else None
+
+    def bridge_view(self):
+        """What the renderer should show for bridges: the running bridge animation,
+        or, while the switch-pressing roll is still under way, its starting pose
+        (so the new bridge does not show up before the block lands)."""
+        if self.bridge_fx is not None:
+            return self.bridge_fx
+        if self._queued_bridges is not None:
+            return (*self._queued_bridges, 0.0)
+        return None
+
+    def present(self, flip=True):
+        """Show the last drawn frame in the window (flip=False: leave the flip to the caller).
 
         A Retina window has 2x the pixels of the logical screen. The UI frame
         is scaled up to fill it, and the board is drawn on top at the full
         resolution, so tiles and block are sharp instead of blurred by the OS.
+        While the UI is unchanged only the board's area is refreshed.
+
+        The board is drawn on its own transparent layer: the renderer's glows,
+        trails and particles use translucent colours, which only work on a
+        surface with per-pixel alpha (the window surface has none).
         """
         hi = self.window.get_surface()
         if hi.get_size() == self.screen.get_size():
             hi.blit(self.screen, (0, 0))
+            self._hi_ui_shown = None
         elif not sharp_board(self):
             pygame.transform.smoothscale(self.screen, hi.get_size(), hi)
+            self._hi_ui_shown = None
         else:
             ui = self._presentation_cache[2]
             if self._hi_base is None or self._hi_base[0] is not ui or self._hi_base[1].get_size() != hi.get_size():
                 self._hi_base = (ui, pygame.transform.smoothscale(ui, hi.get_size()))
-            hi.blit(self._hi_base[1], (0, 0))
             scale = hi.get_width() / self.screen.get_width()
             rect = pygame.Rect(round(self.board_rect.x * scale), round(self.board_rect.y * scale),
                                round(self.board_rect.w * scale), round(self.board_rect.h * scale))
-            if self._hi_board is None or self._hi_board.get_size() != rect.size:
-                self._hi_board = pygame.Surface(rect.size, pygame.SRCALPHA)
+            if getattr(self, 'trauma', 0.0) > 0.01:  # same camera shake as the 1x path
+                intensity = self.trauma ** 1.5
+                ticks = pygame.time.get_ticks()
+                rect.move_ip(round(math.sin(ticks * 0.048) * 2.5 * intensity * scale),
+                             round(math.cos(ticks * 0.062) * 1.8 * intensity * scale))
+            rect = rect.clamp(hi.get_rect())
+            if self._hi_ui_shown is not ui:
+                hi.blit(self._hi_base[1], (0, 0))
+                self._hi_ui_shown = ui
+            else:  # UI unchanged: restore just the board's area (plus the shake margin)
+                area = rect.inflate(round(16 * scale), round(16 * scale)).clip(hi.get_rect())
+                hi.blit(self._hi_base[1], area.topleft, area)
             self.renderer.zoom, self.renderer.pan = self.zoom, (self.pan[0] * scale, self.pan[1] * scale)
             self.renderer.pixel_scale = scale
-            self.renderer.draw(self._hi_board, self.session.current_state, self.animation.frame)
+            if self._hi_board is None or self._hi_board.get_size() != rect.size:
+                self._hi_board = pygame.Surface(rect.size, pygame.SRCALPHA)
+            self._hi_board.fill((0, 0, 0, 0))
+            # clear=False: moving frames are composed straight onto this layer.
+            self.renderer.draw(self._hi_board, self.session.current_state, self.animation.frame,
+                               intro_t=getattr(self, 'intro_t', None), outro_t=self.board_outro(),
+                               shockwave=getattr(self, 'shockwave', None), bridges=self.bridge_view(), clear=False)
             hi.blit(self._hi_board, rect)
-        self.window.flip()
+        if flip:
+            self.window.flip()
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
             self.handle_key(event.key)
         elif event.type in (pygame.WINDOWSIZECHANGED, pygame.VIDEORESIZE) and self.window is not None:
             self.screen = pygame.Surface(self.window.size)
-            self._presentation_cache = self._hi_base = None
+            self._presentation_cache = self._hi_base = self._hi_ui_shown = None
         elif event.type == pygame.VIDEORESIZE:
             self.screen = pygame.display.set_mode((max(theme.MIN_SIZE[0], event.w), max(theme.MIN_SIZE[1], event.h)), pygame.RESIZABLE)
         elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -770,11 +870,18 @@ class BloxorzApp:
                     pass
         else:
             self.sound_enabled = False  # no audio device: Settings should say Off
-        clock = pygame.time.Clock()
+        try:
+            rates = pygame.display.get_desktop_refresh_rates()
+        except (AttributeError, pygame.error):
+            rates = []
+        pacer = FramePacer(rates[0] if rates else 60)
+        last = time.perf_counter()
         try:
             running = True
             while running:
-                dt = min(clock.tick(60) / 1000, 0.1)
+                now = time.perf_counter()
+                dt = min(now - last, 0.1)  # exact elapsed time, not whole milliseconds
+                last = now
                 for event in pygame.event.get():
                     if event.type in (pygame.QUIT, pygame.WINDOWCLOSE) or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and not (self.stage_picker or self.menu or self.dropdown_open
                                                                                                                 or self.win_phase == 'choice')):
@@ -782,8 +889,10 @@ class BloxorzApp:
                     else:
                         self.handle_event(event)
                 self.update(dt)
-                if self.draw():
-                    self.present()
+                drew = self.draw()
+                if drew:
+                    self.present(flip=False)
+                pacer.wait_and_flip(self.window, drew)
         finally:
             self.gateway.close()
             if hasattr(self.renderer, 'close'):
