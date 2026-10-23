@@ -20,7 +20,7 @@ def scene(app):
     cached = getattr(app, '_scene_cache', None)
     if cached and cached[0] == key:
         return cached[1]
-    cells = tuple((r, c) for r, row in enumerate(app.stage.grid) for c, tile in enumerate(row) if tile.value != '0') if style == 'blueprint' else ()
+    cells = tuple((r, c) for r, row in enumerate(app.stage.grid) for c, tile in enumerate(row) if tile.value != '0') if style in ('blueprint', 'forest') else ()
     result = background(size, style, cells, app.stage_index)
     app._scene_cache = (key, result)
     return result
@@ -212,23 +212,34 @@ draw_frosted_glass_panel = draw_glass_panel
 
 
 def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
-    """Render high-end dimensional isometric jewel logo with frosted 3D pill badge and breathing aura."""
-    pulse = 0.5 + 0.5 * math.sin(ticks * 0.0035)
+    """Render high-end dimensional isometric jewel logo with glowing halo ellipse, glistening 3D crystal emblem, and aura."""
+    pulse = 0.5 + 0.5 * math.sin(ticks * 0.0032)
 
-    # 1. Radiant Multi-layered Breathing Aura (No hard ellipse borders)
-    aura_w, aura_h = 320, 80
-    aura_surf = pygame.Surface((aura_w, aura_h), pygame.SRCALPHA)
-    for layer in range(3):
-        r_w = aura_w - layer * 40
-        r_h = aura_h - layer * 14
-        alpha = int((32 + 25 * pulse) / (layer + 1.2))
+    # 1. Enclosing Radiant Elliptical Halo (Logo and emblem sit completely inside)
+    halo_w, halo_h = 370, 140
+    halo_surf = pygame.Surface((halo_w, halo_h), pygame.SRCALPHA)
+    for layer in range(4):
+        rw = halo_w - layer * 34
+        rh = halo_h - layer * 16
+        alpha = int((38 + 26 * pulse) / (layer + 1.15))
         glow_color = (*T.ACCENT[:3], alpha)
-        pygame.draw.ellipse(aura_surf, glow_color, ((aura_w - r_w) // 2, (aura_h - r_h) // 2, r_w, r_h))
-    screen.blit(aura_surf, (cx - aura_w // 2, cy - 24))
+        pygame.draw.ellipse(halo_surf, glow_color, ((halo_w - rw) // 2, (halo_h - rh) // 2, rw, rh))
+    # Crisp holographic perimeter ring
+    ring_col = (*T.ACCENT[:3], int(65 + 35 * pulse))
+    pygame.draw.ellipse(halo_surf, ring_col, (4, 4, halo_w - 8, halo_h - 8), 1)
+    screen.blit(halo_surf, (cx - halo_w // 2, cy - 42))
 
-    # 2. Isometric 3D Crystal Block Emblem (1x1x2 jewel block floating above title)
-    emblem_y = cy - 26 + math.sin(ticks * 0.004) * 3.0
+    # 2. Silky Smooth 60FPS Isometric 3D Crystal Block Emblem
+    # Gentle, non-laggy sinusoidal float
+    emblem_y = cy - 14 + math.sin(ticks * 0.0028) * 3.2
     bx, by = cx, emblem_y
+
+    # Brilliant Diamond Aura behind crystal cube
+    aura_r = 28
+    cube_aura = pygame.Surface((aura_r * 2 + 16, aura_r * 2 + 16), pygame.SRCALPHA)
+    pygame.draw.circle(cube_aura, (*T.ACCENT[:3], int(65 + 40 * pulse)), (aura_r + 8, aura_r + 8), aura_r + 4)
+    screen.blit(cube_aura, (bx - aura_r - 8, by - aura_r - 4))
+
     # Rhomboid top face
     top_pts = [(bx, by - 14), (bx + 18, by - 5), (bx, by + 4), (bx - 18, by - 5)]
     # Left vertical face
@@ -236,24 +247,45 @@ def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
     # Right vertical face
     right_pts = [(bx, by + 4), (bx + 18, by - 5), (bx + 18, by + 17), (bx, by + 26)]
 
-    top_col = lerp_color(T.ACCENT, (255, 255, 255), 0.55)
-    left_col = lerp_color(T.ACCENT, (20, 30, 45) if style != 'dream' else (180, 120, 150), 0.35)
-    right_col = lerp_color(T.ACCENT, (5, 10, 20) if style != 'dream' else (130, 70, 100), 0.65)
+    top_col = lerp_color(T.ACCENT, (255, 255, 255), 0.58)
+    left_col = lerp_color(T.ACCENT, (22, 32, 48) if style != 'dream' else (185, 122, 155), 0.35)
+    right_col = lerp_color(T.ACCENT, (8, 12, 22) if style != 'dream' else (135, 72, 105), 0.65)
 
     pygame.draw.polygon(screen, left_col, left_pts)
     pygame.draw.polygon(screen, right_col, right_pts)
     pygame.draw.polygon(screen, top_col, top_pts)
 
-    # Crystal facet edge glints
-    pygame.draw.lines(screen, (255, 255, 255, 200), True, top_pts, 1)
-    pygame.draw.line(screen, (255, 255, 255, 160), (bx, by + 4), (bx, by + 26), 1)
+    # Crystal facet edge glints & specular lines
+    pygame.draw.lines(screen, (255, 255, 255, 225), True, top_pts, 1)
+    pygame.draw.line(screen, (255, 255, 255, 185), (bx, by + 4), (bx, by + 26), 1)
+
+    # Shimmering Holographic Diamond Waist Ring (Orbiting waist ring like in-game companion diamond)
+    ring_y = by + 10
+    ring_rect = pygame.Rect(bx - 26, ring_y - 8, 52, 16)
+    ring_pts = [
+        (bx - 26, ring_y),
+        (bx - 14, ring_y - 6),
+        (bx + 14, ring_y - 6),
+        (bx + 26, ring_y),
+        (bx + 14, ring_y + 6),
+        (bx - 14, ring_y + 6),
+    ]
+    pygame.draw.lines(screen, (*T.ACCENT[:3], int(150 + 80 * pulse)), True, ring_pts, 1)
+
+    # Twinkling 4-point star glints on the crystal vertices
+    spark_phase = (ticks * 0.005) % (math.pi * 2)
+    for i, (sx, sy) in enumerate(((bx - 18, by - 5), (bx + 18, by - 5), (bx, by + 4))):
+        s_size = 2.5 + 1.5 * math.sin(spark_phase + i * 2.1)
+        if s_size > 2.0:
+            pygame.draw.line(screen, (255, 255, 255), (sx - s_size, sy), (sx + s_size, sy), 1)
+            pygame.draw.line(screen, (255, 255, 255), (sx, sy - s_size), (sx, sy + s_size), 1)
 
     # Floating beacon diamond on top of the block
-    beacon_y = by - 24 + math.sin(ticks * 0.006) * 2.5
+    beacon_y = by - 24 + math.sin(ticks * 0.005) * 2.2
     beacon_pts = [(bx, beacon_y - 6), (bx + 5, beacon_y), (bx, beacon_y + 6), (bx - 5, beacon_y)]
     pygame.draw.polygon(screen, (255, 255, 255), beacon_pts)
     beacon_glow = pygame.Surface((20, 20), pygame.SRCALPHA)
-    pygame.draw.circle(beacon_glow, (*T.ACCENT[:3], int(110 + 60 * pulse)), (10, 10), 8)
+    pygame.draw.circle(beacon_glow, (*T.ACCENT[:3], int(120 + 70 * pulse)), (10, 10), 8)
     screen.blit(beacon_glow, (bx - 10, beacon_y - 10))
 
     # 3. Dimensional Typography: "BLOXORZ" + Frosted Glass [ 3D ] Capsule Badge
@@ -264,7 +296,7 @@ def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
     badge_w, badge_h = 48, 26
     total_w = t_surf.get_width() + 12 + badge_w
     t_x = cx - total_w // 2
-    t_y = cy + 22
+    t_y = cy + 34
 
     # Shadow layer
     screen.blit(t_shadow, (t_x, t_y + 2))
@@ -279,7 +311,7 @@ def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
 
     # 4. Refined Subtitle
     sub_surf = caption.render("—   SPATIAL LOGIC & SEARCH SIMULATION   —", True, T.MUTED)
-    screen.blit(sub_surf, sub_surf.get_rect(center=(cx, cy + 62)))
+    screen.blit(sub_surf, sub_surf.get_rect(center=(cx, cy + 74)))
 
 
 def draw_main_menu(app):
@@ -309,36 +341,28 @@ def draw_main_menu(app):
     modal_active = bool(app.stage_picker or app.menu)
     if not modal_active:
         ticks = pygame.time.get_ticks()
-        draw_bloxorz_logo(screen, card_rect.centerx, card_rect.y + 48, ticks, style, display, heading, caption)
+        draw_bloxorz_logo(screen, card_rect.centerx, card_rect.y + 44, ticks, style, display, heading, caption)
 
-        # Session Status Mini-Badge
-        badge_w = mw - 72
-        badge_rect = pygame.Rect(card_rect.x + 36, card_rect.y + 124, badge_w, 36)
-        draw_glass_panel(screen, badge_rect, style=style, border_radius=18, shadow=False, fill_alpha=90)
-        status_text = f"STAGE {app.stage_index + 1:02} / 33   ·   {app.session.moves} MOVES"
-        stat_col = (112, 82, 98) if style == 'dream' else ((150, 215, 245) if style == 'blueprint' else (205, 230, 185))
-        s_surf = caption.render(status_text, True, stat_col)
-        screen.blit(s_surf, s_surf.get_rect(center=badge_rect.center))
         btn_w = mw - 72
         btn_x = card_rect.x + 36
-        start_y = card_rect.y + 172
-        btn_gap = 12
+        start_y = card_rect.y + 160
+        btn_gap = 14
 
-        def menu_btn(key, label, y, kind='pill', height=44, icon=None):
+        def menu_btn(key, label, y, kind='pill', height=46, icon=None, btn_font=body):
             b = Button(key, label, pygame.Rect(btn_x, y, btn_w, height), True, False, kind, icon=icon)
             app.buttons.append(b)
-            b.draw(screen, body)
+            b.draw(screen, btn_font)
 
+        # Prominent New Game button: larger font, richer color effects, breathing aura
         play_label = f"Continue Stage {app.stage_index + 1:02}" if (app.actions or app.stage_index > 0) else "New Game"
-        menu_btn('continue_game', play_label, start_y, kind='primary', height=46, icon='play')
-        menu_btn('choose', "Select Stage", start_y + 46 + btn_gap, kind='pill', icon='view')
-        menu_btn('load', "Load Saved Session", start_y + (46 + btn_gap) + 44 + btn_gap, kind='pill', icon='load')
-        menu_btn('settings', "Audio & Settings", start_y + (46 + btn_gap) + (44 + btn_gap) * 2, kind='pill', icon='settings')
-        menu_btn('help', "How to Play & Controls", start_y + (46 + btn_gap) + (44 + btn_gap) * 3, kind='pill', icon='help')
+        menu_btn('continue_game', play_label, start_y, kind='primary', height=52, icon='play', btn_font=heading)
+        menu_btn('choose', "Select Stage", start_y + 52 + btn_gap, kind='pill', height=46, icon='view')
+        menu_btn('settings', "Audio & Settings", start_y + 52 + btn_gap + (46 + btn_gap), kind='pill', height=46, icon='settings')
+        menu_btn('help', "How to Play & Controls", start_y + 52 + btn_gap + (46 + btn_gap) * 2, kind='pill', height=46, icon='help')
 
         # Theme quick cycler at bottom of card
         theme_name = NAMES.get(style, style)
-        b_th = Button('theme', f'Theme: {theme_name}', pygame.Rect(btn_x, card_rect.bottom - 44, btn_w, 32), True, False, 'pill', icon='theme')
+        b_th = Button('theme', f'Theme: {theme_name}', pygame.Rect(btn_x, card_rect.bottom - 46, btn_w, 34), True, False, 'pill', icon='theme')
         app.buttons.append(b_th)
         b_th.draw(screen, caption)
 
@@ -401,12 +425,12 @@ def _draw(app):
     idle = not app.busy and not app.animation.busy and getattr(app, 'intro_t', None) is None and getattr(app, 'outro_t', None) is None
     manual = idle and not replaying
 
-    # Solver drawer visibility: Hidden by default, centered map unless drawer is toggled open or active
-    is_drawer_visible = getattr(app, 'solver_open', False) or app.busy or (app.result and app.result.found) or replaying
+    # Solver drawer visibility & animated transition
+    is_drawer_visible = (getattr(app, 'solver_open', False) or replaying or app.busy or getattr(app, 'dropdown_open', False))
     panel_x = w - T.PANEL_WIDTH - 24 if is_drawer_visible else w
     center_w = panel_x if is_drawer_visible else w
 
-    # Map viewport: Centered by default, shifts left when solver opens
+    # Map viewport: starts strictly at y=80 below top veil and ends before bottom toast/dock
     app.board_rect = pygame.Rect(0, 80, panel_x - 16 if is_drawer_visible else w, h - 182)
     board = getattr(app, '_board_surface', None)
     if board is None or board.get_size() != app.board_rect.size:
@@ -430,32 +454,45 @@ def _draw(app):
             draw_rect = app.board_rect.move(shake_x, shake_y)
         screen.blit(board, draw_rect)
 
-    # High-contrast frosted glass container badge for logo & move counter
-    badge_rect = pygame.Rect(20, 10, 226, 58)
-    draw_glass_panel(screen, badge_rect, style=style, border_radius=18, shadow=False)
+    # 1. Single Unified In-game Header Row (y = 16, height = 42)
+    header_y = 16
+    header_h = 42
 
-    if style == 'blueprint':
-        title_col = (245, 250, 255)
-        moves_col = (145, 210, 240)
-    elif forest:
-        title_col = (250, 245, 235)
-        moves_col = (200, 225, 180)
-    else:  # dream city
-        title_col = (72, 48, 62)
-        moves_col = (112, 82, 98)
+    # Left: Logo capsule with miniature animated crystal jewel
+    logo_w = 146
+    logo_rect = pygame.Rect(16, header_y, logo_w, header_h)
+    draw_glass_panel(screen, logo_rect, style=style, border_radius=21, shadow=False)
+    mini_bx, mini_by = 16 + 22, header_y + 21
+    mini_top = [(mini_bx, mini_by - 7), (mini_bx + 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx - 9, mini_by - 2)]
+    mini_left = [(mini_bx - 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx, mini_by + 11), (mini_bx - 9, mini_by + 6)]
+    mini_right = [(mini_bx, mini_by + 2), (mini_bx + 9, mini_by - 2), (mini_bx + 9, mini_by + 6), (mini_bx, mini_by + 11)]
+    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (22, 32, 48) if style != 'dream' else (185, 122, 155), 0.35), mini_left)
+    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (8, 12, 22) if style != 'dream' else (135, 72, 105), 0.65), mini_right)
+    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (255, 255, 255), 0.58), mini_top)
+    pygame.draw.lines(screen, (255, 255, 255, 200), True, mini_top, 1)
+    logo_title = heading.render("BLOXORZ", True, T.TEXT)
+    screen.blit(logo_title, (mini_bx + 16, header_y + (header_h - logo_title.get_height()) // 2))
 
-    # Main Menu button embedded in badge
-    button('main_menu', 'Menu', 26, 18, 64, kind='pill', height=40, icon='menu')
-    label('BLOXORZ', 98, 18, color=title_col, f=heading)
-    label(f'STAGE {app.stage_index + 1:02}  ·  {app.session.moves} MOVES', 98, 42, color=moves_col, f=caption)
+    # Menu button capsule
+    menu_btn_x = 16 + logo_w + 10
+    button('main_menu', 'Menu', menu_btn_x, header_y, 88, kind='pill', height=header_h, icon='menu')
+
+    # Stage and Moves info capsule
+    stat_x = menu_btn_x + 88 + 10
+    stat_w = 196
+    stat_rect = pygame.Rect(stat_x, header_y, stat_w, header_h)
+    draw_glass_panel(screen, stat_rect, style=style, border_radius=21, shadow=False)
+    stat_text = f"STAGE {app.stage_index + 1:02}  ·  {app.session.moves} MOVES"
+    stat_surf = body.render(stat_text, True, T.TEXT)
+    screen.blit(stat_surf, stat_surf.get_rect(center=stat_rect.center))
 
     # Navigation buttons on the right of the header
-    nav_right = w - 24
-    button('help', '?', nav_right - 38, 20, 38, kind='pill', height=40, icon='help')
-    button('settings', 'Settings', nav_right - 146, 20, 100, kind='pill', height=40, icon='settings')
+    nav_right = w - 16
+    button('help', 'Help', nav_right - 84, header_y, 84, kind='pill', height=header_h, icon='help')
+    button('settings', 'Settings', nav_right - 84 - 8 - 110, header_y, 110, kind='pill', height=header_h, icon='settings')
     theme_text = {'dream': 'Dream City', 'forest': 'Forest Ruins', 'blueprint': 'Blueprint', 'forest_gl': 'OpenGL'}.get(style, style)
-    button('theme', theme_text, nav_right - 296, 20, 142, style != 'forest_gl', kind='pill', height=40, icon='theme')
-    button('choose', f'Stage {app.stage_index + 1:02}', nav_right - 424, 20, 120, bool(app.stage_paths), kind='pill', height=40, icon='view')
+    button('theme', theme_text, nav_right - 84 - 8 - 110 - 8 - 140, header_y, 140, style != 'forest_gl', kind='pill', height=header_h, icon='theme')
+    button('choose', f'Stage {app.stage_index + 1:02}', nav_right - 84 - 8 - 110 - 8 - 140 - 8 - 124, header_y, 124, bool(app.stage_paths), kind='pill', height=header_h, icon='view')
 
     # Centered Toast notification: Strictly stacked ABOVE bottom dock (y = h - 96, height = 26)
     message = app.message
@@ -473,22 +510,16 @@ def _draw(app):
         m_surf = caption.render(message, True, T.TEXT)
         screen.blit(m_surf, m_surf.get_rect(center=toast_rect.center))
 
-    # Centered Bottom Dock (y = h - 60, height = 44)
+    # Centered Bottom Dock (y = h - 60, height = 44) - Completely stable, no flickering or jumping on moves
     if not replaying:
+        dock_w = 96 + 102 + 94 + 118 + 36
+        dock_x = max(16, (center_w - dock_w) // 2)
+        button('undo', 'Undo', dock_x, h - 60, 96, bool(app.actions), kind='dock_item', icon='undo', height=44)
+        button('restart', 'Restart', dock_x + 96 + 12, h - 60, 102, True, kind='dock_item', icon='restart', height=44)
+        button('hint', 'Hint', dock_x + 96 + 102 + 24, h - 60, 94, not app.busy, kind='dock_item', icon='hint', height=44)
         if not app.busy:
-            dock_w = 96 + 102 + 94 + 118 + 36
-            dock_x = max(16, (center_w - dock_w) // 2)
-            button('undo', 'Undo', dock_x, h - 60, 96, manual and bool(app.actions), kind='dock_item', icon='undo', height=44)
-            button('restart', 'Restart', dock_x + 96 + 12, h - 60, 102, True, kind='dock_item', icon='restart', height=44)
-            button('hint', 'Hint', dock_x + 96 + 102 + 24, h - 60, 94, manual, kind='dock_item', icon='hint', height=44)
-            button('solve', 'AI Solver', dock_x + 96 + 102 + 94 + 36, h - 60, 118, manual,
+            button('solve', 'AI Solver', dock_x + 96 + 102 + 94 + 36, h - 60, 118, True,
                    kind='primary' if getattr(app, 'solver_open', False) else 'dock_item', selected=getattr(app, 'solver_open', False), icon='solve', height=44)
-        else:
-            dock_w = 96 + 102 + 94 + 24
-            dock_x = max(16, (center_w - dock_w) // 2)
-            button('undo', 'Undo', dock_x, h - 60, 96, False, kind='dock_item', icon='undo', height=44)
-            button('restart', 'Restart', dock_x + 96 + 12, h - 60, 102, False, kind='dock_item', icon='restart', height=44)
-            button('hint', 'Hint', dock_x + 96 + 102 + 24, h - 60, 94, False, kind='dock_item', icon='hint', height=44)
     else:
         left = max(16, (center_w - 480) // 2)
         button('back', 'Back', left, h - 60, 72, app.replay.index > 0, kind='dock_item', icon='back', height=44)
@@ -507,14 +538,14 @@ def _draw(app):
         pygame.draw.circle(screen, T.ACCENT, (app.seek_rect.x + fill.width, app.seek_rect.centery), 5)
         label(f'{app.replay.index} / {app.replay.length}', timeline_x + seek_w + 10, h - 47, T.MUTED, f=caption)
 
-    # Right Solver Drawer (Rendered only when opened / active)
+    # Right Solver Drawer (Rendered cleanly when opened / active)
     if is_drawer_visible:
         if replaying:
             card_h = 360 if (app.stage_cleared and app.stage_index + 1 < len(app.stage_paths)) else 312
         elif app.busy:
             card_h = 254
         elif app.result and app.result.found:
-            card_h = 436 if app.details_open else 328
+            card_h = 446 if app.details_open else 336
         else:
             if app.dropdown_open or app.solver_status in (SolverStatus.ERROR, SolverStatus.TIMEOUT, SolverStatus.NO_SOLUTION, SolverStatus.CANCELLED):
                 card_h = 368
@@ -530,9 +561,9 @@ def _draw(app):
         x, pw, y = panel_x, T.PANEL_WIDTH, 80
         pygame.draw.line(screen, T.LINE, (x + 8, y + 40), (x + pw - 8, y + 40))
 
-        # Close solver drawer button
+        # Close solver drawer button (Working close button!)
         if not app.busy and not replaying:
-            button('close_solver', '✕', panel_x + pw - 24, y + 6, 28, height=28, kind='close_btn', icon='close')
+            button('close_solver', '✕', card_rect.right - 38, y + 8, 30, height=30, kind='close_btn', icon='close')
 
         if replaying:
             label('Watch solution', x, y + 4, f=heading)
@@ -554,22 +585,28 @@ def _draw(app):
             button('cancel', 'Cancel search', x, y + 152, pw)
         elif app.result and app.result.found:
             m = app.result.metrics
-            label('A way forward', x, y + 4, f=heading)
-            label(f'{m.solution_length} moves', x, y + 38, f=display)
+            label('A way forward', x + 4, y + 6, f=heading)
+
+            # Elegant Featured Solution Summary Card
+            sol_rect = pygame.Rect(x, y + 44, pw, 58)
+            draw_glass_panel(screen, sol_rect, style=style, border_radius=16, shadow=False, fill_alpha=160)
+            pygame.draw.rect(screen, (*T.ACCENT[:3], 120), sol_rect, 1, border_radius=16)
+            text(screen, caption, "OPTIMAL SOLUTION READY", (sol_rect.x + 14, sol_rect.y + 10), T.ACCENT)
             alg_label = {'ASTAR': 'A*'}.get(app.result.algorithm, app.result.algorithm)
-            label(f'{m.time_sec:.3f} s  ·  {alg_label}', x, y + 80, T.MUTED, f=caption)
-            button('solution', 'Watch solution', x, y + 116, pw, idle, 'primary')
-            button('details', ('−' if app.details_open else '+') + '  Result details', x, y + 166, pw, kind='quiet')
-            offset = y + 214
+            text(screen, heading, f"{m.solution_length} Moves  ·  {alg_label}", (sol_rect.x + 14, sol_rect.y + 28), T.TEXT)
+
+            button('solution', 'Watch solution', x, y + 116, pw, idle, 'primary', icon='play')
+            button('details', ('−' if app.details_open else '+') + '  Result details', x, y + 168, pw, kind='dock_item')
+            offset = y + 222
             if app.details_open:
                 bw = (pw - 8) // 2
-                bh = 46
+                bh = 50
                 draw_bento_card(screen, pygame.Rect(x, offset, bw, bh), 'TIME', f'{m.time_sec:.3f}', 's', style, caption, mono, caption)
                 draw_bento_card(screen, pygame.Rect(x + bw + 8, offset, bw, bh), 'RAM', f'{m.peak_memory_mb:.2f}', 'MB', style, caption, mono, caption)
                 draw_bento_card(screen, pygame.Rect(x, offset + bh + 8, bw, bh), 'EXPANDED', f'{m.expanded_nodes}', '', style, caption, mono, caption)
                 draw_bento_card(screen, pygame.Rect(x + bw + 8, offset + bh + 8, bw, bh), 'COST', f'{m.total_cost:g}', '', style, caption, mono, caption)
                 offset += (bh * 2 + 16)
-            button('new_search', 'Try another algorithm', x, offset + 12, pw, idle, 'quiet')
+            button('new_search', 'Try another algorithm', x, offset + 10, pw, idle, 'quiet')
         else:
             label('S O L V E R', x + 8, y + 4, f=heading)
             label('ALGORITHM', x, y + 42, T.MUTED, f=caption)
@@ -702,15 +739,27 @@ def _draw_modals(app, screen, w, h, style, heading, body, mono, caption, idle):
 
             pygame.draw.line(screen, T.LINE, (xx, yy + 168), (r.right - 32, yy + 168), 1)
 
+            # Prominent Featured AI Solver Showcase Card
+            solver_card = pygame.Rect(xx, yy + 182, r.width - 64, 54)
+            draw_glass_panel(screen, solver_card, style=style, border_radius=16, shadow=False, fill_alpha=175)
+            pygame.draw.rect(screen, (*T.ACCENT[:3], 180), solver_card, 2, border_radius=16)
+            glow = pygame.Surface((solver_card.width + 12, solver_card.height + 12), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (*T.ACCENT[:3], 35), glow.get_rect(), border_radius=22)
+            screen.blit(glow, (solver_card.x - 6, solver_card.y - 6))
+
+            draw_vector_icon(screen, 'solve', (solver_card.x + 24, solver_card.centery), T.ACCENT, size=18)
+            label('AI SOLVER PANEL', solver_card.x + 44, solver_card.centery - 10, color=T.TEXT, f=heading)
+            is_solver_open = getattr(app, 'solver_open', False)
+            button('toggle_solver', 'On' if is_solver_open else 'Off', solver_card.right - 98, solver_card.y + 7, 88,
+                   selected=is_solver_open, kind='primary' if is_solver_open else 'pill', height=40, icon='solve')
+
             for i, (key, m_title, enabled) in enumerate((
                     ('animate', 'Animation', app.animate),
                     ('contrast', 'High Contrast', app.high_contrast),
-                    ('text', 'Large Text', app.large_text),
-                    ('toggle_solver', 'AI Solver Panel', getattr(app, 'solver_open', False)))):
-                row_y = yy + 182 + i * 42
+                    ('text', 'Large Text', app.large_text))):
+                row_y = yy + 248 + i * 40
                 label(m_title, xx, row_y + 8)
-                button(key, 'On' if enabled else 'Off', r.right - 120, row_y, 88, selected=enabled, kind='pill',
-                       icon='solve' if key == 'toggle_solver' else None)
+                button(key, 'On' if enabled else 'Off', r.right - 120, row_y, 88, selected=enabled, kind='pill')
 
             # View & Camera: Using framed pill buttons with vector icons for prominent clickability
             view_label = 'View: Original' if app.renderer.view == 'original' else 'View: Classic'
@@ -718,15 +767,16 @@ def _draw_modals(app, screen, w, h, style, heading, body, mono, caption, idle):
             button('camera', 'Reset camera', xx + 212, r.bottom - 100, 196, kind='pill', icon='restart', height=40)
             button('recording', 'Replay my moves', xx, r.bottom - 50, 408, idle and bool(app.actions), kind='pill', height=38)
         else:
-            # High-aesthetic 4 Bento Category Cards for HOW TO PLAY
+            # Interactive 4 Bento Category Cards for HOW TO PLAY
             grid_w = (mw - 64 - 16) // 2
             grid_h = 204
             c1_x, c2_x = r.x + 32, r.x + 32 + grid_w + 16
             r1_y, r2_y = r.y + 76, r.y + 76 + grid_h + 14
+            mouse = pygame.mouse.get_pos()
 
             def draw_help_card(cx, cy, card_title, icon_name, items):
                 card_r = pygame.Rect(cx, cy, grid_w, grid_h)
-                draw_glass_panel(screen, card_r, style=style, border_radius=18, shadow=False, fill_alpha=90)
+                draw_glass_panel(screen, card_r, style=style, border_radius=18, shadow=False, fill_alpha=95)
                 # Header badge
                 icon_rect = pygame.Rect(cx + 12, cy + 12, 28, 28)
                 draw_glass_panel(screen, icon_rect, style=style, border_radius=8, shadow=False, fill_alpha=120)
@@ -734,39 +784,55 @@ def _draw_modals(app, screen, w, h, style, heading, body, mono, caption, idle):
                 label(card_title, cx + 48, cy + 16, color=T.TEXT, f=heading)
                 pygame.draw.line(screen, (*T.LINE[:3], 60), (cx + 12, cy + 46), (cx + grid_w - 12, cy + 46), 1)
 
-                item_y = cy + 54
-                for bullet, desc in items:
-                    b_surf = caption.render(bullet, True, T.ACCENT)
-                    screen.blit(b_surf, (cx + 14, item_y))
-                    label(desc, cx + 30, item_y, color=T.MUTED, f=caption, max_width=grid_w - 44)
-                    item_y += 34
+                item_y = cy + 52
+                for key_tag, desc in items:
+                    chip_rect = pygame.Rect(cx + 10, item_y, grid_w - 20, 36)
+                    chip_hover = chip_rect.collidepoint(mouse)
+
+                    chip_bg = pygame.Surface((chip_rect.width, chip_rect.height), pygame.SRCALPHA)
+                    bg_col = (*T.ACCENT[:3], 35) if chip_hover else (255, 255, 255, 25 if style == 'dream' else 15)
+                    pygame.draw.rect(chip_bg, bg_col, chip_bg.get_rect(), border_radius=10)
+                    rim_col = T.ACCENT if chip_hover else (*T.LINE[:3], 50)
+                    pygame.draw.rect(chip_bg, rim_col, chip_bg.get_rect(), 1, border_radius=10)
+                    screen.blit(chip_bg, chip_rect.topleft)
+
+                    tag_w = caption.size(key_tag)[0] + 12
+                    tag_rect = pygame.Rect(chip_rect.x + 8, chip_rect.y + 6, max(36, tag_w), 24)
+                    tag_bg = (*T.ACCENT[:3], 180) if chip_hover else (*T.LINE[:3], 120)
+                    pygame.draw.rect(screen, tag_bg, tag_rect, border_radius=6)
+                    t_surf = caption.render(key_tag, True, T.INK if chip_hover else T.TEXT)
+                    screen.blit(t_surf, t_surf.get_rect(center=tag_rect.center))
+
+                    desc_col = T.TEXT if chip_hover else T.MUTED
+                    label(desc, tag_rect.right + 8, chip_rect.centery - 7, color=desc_col, f=caption, max_width=grid_w - tag_w - 36)
+                    item_y += 42
 
             # Card 1: Objective & Rules
             draw_help_card(c1_x, r1_y, "GOAL & OBJECTIVE", "play", [
-                ("-", "Stand 1×1×2 block upright in goal hole."),
-                ("-", "Falling off edges restarts the current stage."),
-                ("-", "Fragile orange tiles collapse if stood upright!"),
+                ("STAND", "Stand 1×1×2 block upright in goal"),
+                ("EDGES", "Falling off restarts current stage"),
+                ("ORANGE", "Fragile tiles break if upright!"),
             ])
 
             # Card 2: Controls & Movement
             draw_help_card(c2_x, r1_y, "CONTROLS & MOVES", "step", [
-                ("-", "Arrows / WASD : Roll block in 4 directions."),
-                ("-", "Spacebar : Switch active cube when split."),
-                ("-", "Z / U : Undo last move   ·   R : Restart stage."),
+                ("WASD", "Roll block in 4 directions"),
+                ("SPACE", "Switch active cube when split"),
+                ("Z / U", "Undo move  ·  R: Restart stage"),
             ])
 
             # Card 3: Switches & Bridges
             draw_help_card(c1_x, r2_y, "SWITCHES & BRIDGES", "settings", [
-                ("o", "Soft Switch : Pressed by any orientation."),
-                ("x", "Heavy Switch : Only activated upright!"),
-                ("+", "Split Switch : Splits block into 2 cubes."),
+                ("SOFT O", "Pressed flat or upright"),
+                ("HEAVY X", "Only activated upright!"),
+                ("SPLIT <>", "Splits into two 1×1 cubes"),
             ])
 
             # Card 4: Camera & Views
             draw_help_card(c2_x, r2_y, "CAMERA & VIEW", "view", [
-                ("-", "Mouse Scroll : Zoom in / out smoothly."),
-                ("-", "Right Click + Drag : Pan & inspect board."),
-                ("-", "V Key : Toggle Classic / Original camera view."),
+                ("SCROLL", "Zoom in / out smoothly"),
+                ("R-DRAG", "Pan & inspect board"),
+                ("V KEY", "Toggle Classic / Original view"),
             ])
 
 

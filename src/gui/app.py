@@ -467,8 +467,12 @@ class BloxorzApp:
             self.message = f'Save failed: {error}'
 
     def load(self, path=SAVE_PATH):
+        p = Path(path)
+        if not p.exists():
+            self.message = 'No saved session found.'
+            return
         try:
-            data = json.loads(Path(path).read_text(encoding='utf-8'))
+            data = json.loads(p.read_text(encoding='utf-8'))
             if not isinstance(data, dict):
                 raise ValueError('Save must be an object.')
             if data['version'] != 1:
@@ -532,6 +536,7 @@ class BloxorzApp:
         self.renderer.set_view(view)
         self.zoom, self.pan = 1.0, [0, 0]
         self.stage_picker = False
+        self.in_main_menu = False
         self.message = 'Session loaded.'
 
     def update(self, dt):
@@ -588,7 +593,7 @@ class BloxorzApp:
                 self.wait = 0.12 / self.speed
         target_drawer = 1.0 if self.solver_open else 0.0
         self.drawer_t += (target_drawer - self.drawer_t) * min(1.0, dt * 11.0)
-        target_cam = -160.0 * self.drawer_t
+        target_cam = -88.0 * self.drawer_t
         self.camera_pan_x += (target_cam - self.camera_pan_x) * min(1.0, dt * 11.0)
         target_menu = 1.0 if self.in_main_menu else 0.0
         self.menu_t += (target_menu - self.menu_t) * min(1.0, dt * 9.0)

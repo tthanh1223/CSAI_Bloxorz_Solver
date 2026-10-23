@@ -224,22 +224,30 @@ def draw_glass_panel(surface, rect, style='dream', border_radius=24, shadow=True
 
 
 def draw_bento_card(surface, rect, label, value, unit="", style='dream', font_lbl=None, font_val=None, font_unit=None):
-    """Render a 2x2 Bento Metric Card with subtle inset glass styling and high-contrast typography."""
-    draw_glass_panel(surface, rect, style=style, border_radius=16, shadow=False, fill_alpha=75, specular=False)
-    border_col = (255, 255, 255, 45) if style == 'dream' else (*theme.LINE[:3], 55)
-    pygame.draw.rect(surface, border_col, rect, 1, border_radius=16)
+    """Render a 2x2 Bento Metric Card with solid frosted glass styling, hover glow, and centered typography."""
+    mouse_pos = pygame.mouse.get_pos()
+    is_hover = rect.collidepoint(mouse_pos)
+    alpha = 185 if style == 'dream' else 215
+    draw_glass_panel(surface, rect, style=style, border_radius=14, shadow=False, fill_alpha=alpha, specular=True)
+    border_col = theme.ACCENT if is_hover else ((255, 255, 255, 80) if style == 'dream' else (*theme.LINE[:3], 90))
+    pygame.draw.rect(surface, border_col, rect, 1, border_radius=14)
+    if is_hover:
+        glow = pygame.Surface((rect.width + 8, rect.height + 8), pygame.SRCALPHA)
+        pygame.draw.rect(glow, (*theme.ACCENT[:3], 35), glow.get_rect(), border_radius=18)
+        surface.blit(glow, (rect.x - 4, rect.y - 4))
 
-    lbl_color = theme.MUTED
+    lbl_color = theme.ACCENT if is_hover else theme.MUTED
     if font_lbl:
-        text(surface, font_lbl, label.upper(), (rect.x + 12, rect.y + 10), lbl_color)
+        text(surface, font_lbl, label.upper(), (rect.x + 12, rect.y + 7), lbl_color)
 
     val_color = theme.TEXT
     if font_val:
         v_surf = font_val.render(str(value), True, val_color)
-        surface.blit(v_surf, (rect.x + 12, rect.y + 28))
-        if unit and font_unit:
-            u_surf = font_unit.render(f" {unit}", True, theme.MUTED)
-            surface.blit(u_surf, (rect.x + 12 + v_surf.get_width(), rect.y + 34))
+        u_surf = font_unit.render(f" {unit}", True, theme.MUTED) if (unit and font_unit) else None
+        val_y = rect.y + 24
+        surface.blit(v_surf, (rect.x + 12, val_y))
+        if u_surf:
+            surface.blit(u_surf, (rect.x + 12 + v_surf.get_width(), val_y + max(0, v_surf.get_height() - u_surf.get_height() - 2)))
 
 
 _BUTTON_ANIM: dict[str, dict[str, float]] = {}
@@ -429,20 +437,48 @@ class Button:
         elif has_vector_icon and not self.label:
             # Centered icon only
             draw_vector_icon(surface, icon_name, draw_rect.center, foreground, size=15)
-        elif has_vector_icon and (self.kind in ('dock_item', 'icon', 'pill') or self.key in ('undo', 'restart', 'hint', 'solve', 'view', 'menu', 'theme', 'settings', 'help')):
-            # Draw icon on the left, label on the right
+        elif has_vector_icon and (self.kind in ('dock_item', 'icon', 'pill', 'primary', 'secondary') or self.key in ('undo', 'restart', 'hint', 'solve', 'view', 'menu', 'theme', 'settings', 'help', 'continue_game')):
+            # Centered (icon + gap + label + chevron) group
             is_dock = self.kind == 'dock_item'
-            icon_cx = draw_rect.x + (16 if is_dock else 18)
-            icon_cy = draw_rect.centery
-            draw_vector_icon(surface, icon_name, (icon_cx, icon_cy), foreground, size=13 if is_dock else 14)
+            icon_size = 13 if is_dock else 14
+            gap = 7
             lbl = font.render(self.label, True, foreground)
-            lbl_rect = lbl.get_rect(midleft=(icon_cx + (8 if is_dock else 10), draw_rect.centery))
-            surface.blit(lbl, lbl_rect)
-        else:
-            # Centered label
-            lbl = font.render(self.label, True, foreground)
-            surface.blit(lbl, lbl.get_rect(center=draw_rect.center))
+            lbl_w, lbl_h = lbl.get_size()
 
-        if self.key in ('choose', 'algorithm_menu'):
-            x, y = draw_rect.right - 16, draw_rect.centery
-            pygame.draw.lines(surface, foreground, False, [(x - 4, y - 2), (x, y + 2), (x + 4, y - 2)], 1)
+            has_chevron = self.key in ('choose', 'algorithm_menu')
+            chev_space = (gap + 8) if has_chevron else 0
+
+            avail_w = draw_rect.width - 16
+            if icon_size + gap + lbl_w + chev_space > avail_w:
+                lbl_max_w = max(10, avail_w - icon_size - gap - chev_space)
+                lbl_text = self.label
+                while lbl_text and font.size(lbl_text + '…')[0] > lbl_max_w:
+                    lbl_text = lbl_text[:-1]
+                lbl = font.render(lbl_text + ('…' if lbl_text != self.label else ''), True, foreground)
+                lbl_w = lbl.get_width()
+
+            total_content_w = icon_size + gap + lbl_w + chev_space
+            start_x = round(draw_rect.centerx - total_content_w / 2)
+            icon_cx = start_x + icon_size // 2
+            draw_vector_icon(surface, icon_name, (icon_cx, draw_rect.centery), foreground, size=icon_size)
+            lbl_rect = lbl.get_rect(midleft=(start_x + icon_size + gap, draw_rect.centery))
+            surface.blit(lbl, lbl_rect)
+            if has_chevron:
+                ch_x = lbl_rect.right + gap + 4
+                ch_y = draw_rect.centery
+                pygame.draw.lines(surface, foreground, False, [(ch_x - 4, ch_y - 2), (ch_x, ch_y + 2), (ch_x + 4, ch_y - 2)], 1)
+        else:
+            # Centered label (with optional chevron)
+            has_chevron = self.key in ('choose', 'algorithm_menu')
+            lbl = font.render(self.label, True, foreground)
+            if has_chevron:
+                gap = 6
+                total_w = lbl.get_width() + gap + 8
+                start_x = round(draw_rect.centerx - total_w / 2)
+                lbl_rect = lbl.get_rect(midleft=(start_x, draw_rect.centery))
+                surface.blit(lbl, lbl_rect)
+                ch_x = lbl_rect.right + gap + 4
+                ch_y = draw_rect.centery
+                pygame.draw.lines(surface, foreground, False, [(ch_x - 4, ch_y - 2), (ch_x, ch_y + 2), (ch_x + 4, ch_y - 2)], 1)
+            else:
+                surface.blit(lbl, lbl.get_rect(center=draw_rect.center))

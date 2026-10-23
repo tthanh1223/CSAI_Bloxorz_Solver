@@ -475,9 +475,9 @@ class IsometricRenderer:
             distance = ORIGINAL_DISTANCE * max(max(rows) - min(rows), max(cols) - min(cols), 4)
             eye = perspective_eye((min(rows) + max(rows)) / 2, (min(cols) + max(cols)) / 2, distance)
             points = [perspective_raw(eye, r, c, z) for r, c in corners
-                      for z in (-.45, 2.2)]  # tile side .. standing block
+                      for z in (-.32, 0.65)]
             xs = [p[0] for p in points];ys = [p[1] for p in points]
-            focal = min(size[0] * .88 / (max(xs) - min(xs)), size[1] * .88 / (max(ys) - min(ys)))
+            focal = min(size[0] * .86 / (max(xs) - min(xs)), size[1] * .86 / (max(ys) - min(ys)))
             cap = 112 * self.pixel_scale  # tile width 2..112 logical px at the centre
             focal = max(2 * distance, min(cap * distance, focal))
             origin = (size[0] / 2 - (min(xs) + max(xs)) * focal / 2,
@@ -589,8 +589,31 @@ class IsometricRenderer:
         base = pygame.Surface(self.size, pygame.SRCALPHA)
         yield
         top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
-        # No drop shadow under the islands (removed on request); intro/outro skip it too.
-        shadow_surf = None
+        # Volumetric under-island ambient drop shadow for all 3 themes
+        shadow_colors = {
+            'dream': (120, 70, 98, 95),       # Soft dreamy lavender-mauve shadow onto clouds
+            'forest': (14, 26, 18, 130),      # Deep misty canopy shadow
+            'blueprint': (8, 22, 38, 115),    # Blueprint drafting depth shadow
+        }
+        shadow_color = shadow_colors.get(self.style, (25, 25, 35, 100))
+        raw_shadow = pygame.Surface(self.size, pygame.SRCALPHA)
+        for r, c in active_cells:
+            fp = [self.project((r + dr, c + dc, -0.58)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
+            pygame.draw.polygon(raw_shadow, shadow_color, fp)
+
+        sw, sh = self.size
+        # Pass 1: Broad diffused ambient drop shadow (offset +14px down)
+        tiny1 = pygame.transform.smoothscale(raw_shadow, (max(1, sw // 6), max(1, sh // 6)))
+        soft1 = pygame.transform.smoothscale(tiny1, (sw, sh))
+
+        # Pass 2: Closer contact drop shadow (offset +6px down)
+        tiny2 = pygame.transform.smoothscale(raw_shadow, (max(1, sw // 3), max(1, sh // 3)))
+        soft2 = pygame.transform.smoothscale(tiny2, (sw, sh))
+
+        shadow_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+        shadow_surf.blit(soft1, (0, 14))
+        shadow_surf.blit(soft2, (0, 6))
+        base.blit(shadow_surf, (0, 0))
         yield
         if self.style == 'blueprint':
             # Blueprint datum floor footprint & architectural projection lines
