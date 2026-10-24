@@ -475,7 +475,7 @@ class IsometricRenderer:
             distance = ORIGINAL_DISTANCE * max(max(rows) - min(rows), max(cols) - min(cols), 4)
             eye = perspective_eye((min(rows) + max(rows)) / 2, (min(cols) + max(cols)) / 2, distance)
             points = [perspective_raw(eye, r, c, z) for r, c in corners
-                      for z in (-.32, 0.65)]
+                      for z in (-.35, 2.35)]
             xs = [p[0] for p in points];ys = [p[1] for p in points]
             focal = min(size[0] * .86 / (max(xs) - min(xs)), size[1] * .86 / (max(ys) - min(ys)))
             cap = 112 * self.pixel_scale  # tile width 2..112 logical px at the centre
@@ -1875,33 +1875,31 @@ class IsometricRenderer:
             pygame.draw.circle(surface, (255, 255, 255), (round(project(0, 0, dz_ridge + 0.02)[0]), round(project(0, 0, dz_ridge + 0.02)[1])), 2)
 
         elif kind == '<>':
-            # SPLIT SWITCH: Dual Faceted Quantum Chevrons & Central Faceted Diamond Core
-            base_pts = [project(-.36, -.36), project(-.36, .36), project(.36, .36), project(.36, -.36)]
-            pygame.draw.polygon(surface, (12, 22, 32), base_pts)
-            pygame.draw.aalines(surface, (36, 75, 105), True, base_pts)
+            # SPLIT SWITCH: Ethereal Quantum Teleportation Portal & Dual Crystalline Chevrons (No black pad)
+            dz_q = 0.035 if not pressed else -0.015
+            cyan_light = (215, 255, 255) if not pressed else (150, 240, 255)
+            cyan_mid = (45, 225, 255) if not pressed else (25, 175, 210)
+            cyan_dark = (16, 145, 185) if not pressed else (10, 105, 140)
+            cyan_glow = (100, 240, 255) if not pressed else (60, 170, 200)
 
-            dz_q = 0.03 if not pressed else -0.015
-            cyan_light = (180, 255, 255) if not pressed else (120, 240, 255)
-            cyan_mid = (40, 225, 245) if not pressed else (25, 175, 205)
-            cyan_dark = (18, 140, 175) if not pressed else (12, 105, 135)
+            # 1. Concentric luminous rune rings etched directly into tile
+            outer_ring = [project(0.36 * cos(k * pi / 6), 0.36 * sin(k * pi / 6), 0.005) for k in range(12)]
+            pygame.draw.aalines(surface, cyan_glow, True, outer_ring)
+            inner_ring = [project(0.24 * cos(k * pi / 6), 0.24 * sin(k * pi / 6), 0.005) for k in range(12)]
+            pygame.draw.aalines(surface, (160, 250, 255) if not pressed else (100, 200, 220), True, inner_ring)
 
-            # Central Faceted Quantum Micro-Diamond
-            d_top = project(0, 0, dz_q + 0.06)
-            d_bot = project(0, 0, dz_q - 0.03)
-            d_eq = [project(0.08 * cos(k * pi / 2), 0.08 * sin(k * pi / 2), dz_q + 0.015) for k in range(4)]
-            pygame.draw.polygon(surface, cyan_light, [d_top, d_eq[0], d_eq[1]])
-            pygame.draw.polygon(surface, cyan_mid, [d_top, d_eq[1], d_eq[2]])
-            pygame.draw.polygon(surface, cyan_dark, [d_top, d_eq[2], d_eq[3]])
-            pygame.draw.polygon(surface, cyan_mid, [d_top, d_eq[3], d_eq[0]])
-            for k in range(4):
-                pygame.draw.aaline(surface, (255, 255, 255), d_top, d_eq[k])
-                pygame.draw.aaline(surface, (255, 255, 255), d_eq[k], d_eq[(k + 1) % 4])
+            # 2. Corner energy anchors connecting the portal to the tile corners
+            for dr, dc in ((-.34, -.34), (-.34, .34), (.34, .34), (.34, -.34)):
+                p_c = project(dr, dc, 0.005)
+                pygame.draw.circle(surface, (200, 255, 255), (round(p_c[0]), round(p_c[1])), 2)
+                p_in = project(dr * 0.7, dc * 0.7, 0.005)
+                pygame.draw.aaline(surface, cyan_glow, p_c, p_in)
 
-            # Left Faceted Quantum Chevron Prism `<`
-            c_tip_l = project(0, -.26, dz_q)
-            c_top_l = project(-.22, -.06, dz_q)
-            c_bot_l = project(.22, -.06, dz_q)
-            c_in_l = project(0, -.14, dz_q + 0.02)
+            # 3. Left Faceted Quantum Chevron Prism `<`
+            c_tip_l = project(0, -.28, dz_q)
+            c_top_l = project(-.22, -.07, dz_q)
+            c_bot_l = project(.22, -.07, dz_q)
+            c_in_l = project(0, -.13, dz_q + 0.025)
 
             f_left_top = [c_top_l, c_tip_l, c_in_l]
             f_left_bot = [c_tip_l, c_bot_l, c_in_l]
@@ -1910,11 +1908,11 @@ class IsometricRenderer:
             pygame.draw.aalines(surface, (255, 255, 255), True, f_left_top)
             pygame.draw.aalines(surface, (255, 255, 255), True, f_left_bot)
 
-            # Right Faceted Quantum Chevron Prism `>`
-            c_tip_r = project(0, .26, dz_q)
-            c_top_r = project(-.22, .06, dz_q)
-            c_bot_r = project(.22, .06, dz_q)
-            c_in_r = project(0, .14, dz_q + 0.02)
+            # 4. Right Faceted Quantum Chevron Prism `>`
+            c_tip_r = project(0, .28, dz_q)
+            c_top_r = project(-.22, .07, dz_q)
+            c_bot_r = project(.22, .07, dz_q)
+            c_in_r = project(0, .13, dz_q + 0.025)
 
             f_right_top = [c_top_r, c_tip_r, c_in_r]
             f_right_bot = [c_tip_r, c_bot_r, c_in_r]
@@ -1923,10 +1921,16 @@ class IsometricRenderer:
             pygame.draw.aalines(surface, (255, 255, 255), True, f_right_top)
             pygame.draw.aalines(surface, (255, 255, 255), True, f_right_bot)
 
-            pygame.draw.aaline(surface, (200, 255, 255), project(0, -.32, dz_q), project(0, .32, dz_q))
-            for offset_c in (-.32, -.26, 0, .26, .32):
-                p_node = project(0, offset_c, dz_q)
-                pygame.draw.circle(surface, (255, 255, 255), (round(p_node[0]), round(p_node[1])), 1)
+            # 5. Twin Split Micro-Gems in the center (representing the 2 separated cubes)
+            for gem_dc, gem_col in ((-0.055, cyan_light), (0.055, cyan_mid)):
+                g_top = project(0, gem_dc, dz_q + 0.055)
+                g_eq = [project(0.045 * cos(k * pi / 2), gem_dc + 0.045 * sin(k * pi / 2), dz_q + 0.02) for k in range(4)]
+                pygame.draw.polygon(surface, (255, 255, 255), [g_top, g_eq[0], g_eq[1]])
+                pygame.draw.polygon(surface, gem_col, [g_top, g_eq[1], g_eq[2]])
+                pygame.draw.polygon(surface, cyan_dark, [g_top, g_eq[2], g_eq[3]])
+                pygame.draw.polygon(surface, gem_col, [g_top, g_eq[3], g_eq[0]])
+                pygame.draw.aalines(surface, (255, 255, 255), True, g_eq)
+                pygame.draw.circle(surface, (255, 255, 255), (round(g_top[0]), round(g_top[1])), 2)
 
         elif kind == '!':
             # FRAGILE TILE: Procedural Unique Multi-Branch Fracture Network with 3D Light-and-Shadow Relief

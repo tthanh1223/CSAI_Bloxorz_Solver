@@ -73,41 +73,6 @@ def forest_ruins(size, cells, stage_index):
         if mr > 1:
             pygame.draw.circle(motes, (255, 255, 200, ma // 3), (mx, my), mr + 2)
     result.blit(motes, (0, 0))
-
-    # Ancient Stone Relic Survey 2D Map Tablet in lower-left
-    if cells:
-        font_path = Path(__file__).resolve().parents[2] / 'assets' / 'fonts' / 'SpaceGrotesk-Medium.ttf'
-        font = pygame.font.Font(str(font_path) if font_path.exists() else pygame.font.match_font('segoeui'), 11)
-
-        base_x = 48
-        base_y = max(120, h - 185)
-
-        rmin = min(r for r, c in cells)
-        cmin = min(c for r, c in cells)
-        span = max(max(r for r, c in cells) - rmin + 1, max(c for r, c in cells) - cmin + 1)
-        unit = min(9, 72 // max(1, span))
-        grid_top = base_y + 36
-
-        # Frosted mossy stone backing panel
-        pad = 12
-        tablet_w = max(160, (max(c for r, c in cells) - cmin + 1) * unit + pad * 2)
-        tablet_h = (max(r for r, c in cells) - rmin + 1) * unit + 74
-        tablet_surf = pygame.Surface((tablet_w, tablet_h), pygame.SRCALPHA)
-        pygame.draw.rect(tablet_surf, (14, 28, 20, 160), tablet_surf.get_rect(), border_radius=12)
-        pygame.draw.rect(tablet_surf, (80, 140, 100, 110), tablet_surf.get_rect(), 1, border_radius=12)
-        result.blit(tablet_surf, (base_x - pad, base_y - 8))
-
-        result.blit(font.render("ANCIENT RELIC SURVEY", True, (160, 210, 175)), (base_x, base_y))
-        result.blit(font.render("STONE MAP  1 : 1", True, (120, 165, 135)), (base_x, base_y + 16))
-
-        for r, c in cells:
-            pygame.draw.rect(result, (95, 175, 130), (base_x + (c - cmin) * unit, grid_top + (r - rmin) * unit, unit, unit), 1)
-            pygame.draw.rect(result, (45, 95, 65, 90), (base_x + (c - cmin) * unit + 1, grid_top + (r - rmin) * unit + 1, unit - 2, unit - 2))
-
-        grid_bottom = grid_top + (max(r for r, c in cells) - rmin + 1) * unit
-        result.blit(font.render(f"STAGE  {stage_index + 1:02}  (RELIQUARY)", True, (160, 210, 175)), (base_x, grid_bottom + 8))
-        result.blit(font.render("SANCTUARY PLAN", True, (120, 165, 135)), (base_x, grid_bottom + 22))
-
     return result
 
 

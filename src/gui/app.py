@@ -620,6 +620,9 @@ class BloxorzApp:
             if key == pygame.K_t:
                 self.command('theme')
                 return
+            if key == pygame.K_q:
+                self.command('exit_game')
+                return
             return
         if self.stage_picker or self.menu or self.dropdown_open:
             if key == pygame.K_ESCAPE:
@@ -679,6 +682,10 @@ class BloxorzApp:
         if key == 'close_solver':
             self.solver_open = False
             return
+        if key in ('exit_game', 'quit'):
+            self._exit_requested = True
+            pygame.event.post(pygame.event.Event(pygame.QUIT))
+            return
         if key == 'theme':
             from src.gui.themes import cycle_theme
             cycle_theme(self)
@@ -733,11 +740,11 @@ class BloxorzApp:
         elif key == 'restart': self.restart()
         elif key == 'undo': self.undo()
         elif key == 'solve':
-            if not self.solver_open:
-                self.solver_open = True
+            self.solver_open = not self.solver_open
+            if self.solver_open:
                 self.details_open = True
-            else:
-                self.solve()
+        elif key == 'solve_now':
+            self.solve()
         elif key == 'hint': self.solve(True)
         elif key == 'cancel' and self.busy:
             self.gateway.cancel(self.active_request)

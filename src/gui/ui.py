@@ -227,27 +227,34 @@ def draw_bento_card(surface, rect, label, value, unit="", style='dream', font_lb
     """Render a 2x2 Bento Metric Card with solid frosted glass styling, hover glow, and centered typography."""
     mouse_pos = pygame.mouse.get_pos()
     is_hover = rect.collidepoint(mouse_pos)
-    alpha = 185 if style == 'dream' else 215
-    draw_glass_panel(surface, rect, style=style, border_radius=14, shadow=False, fill_alpha=alpha, specular=True)
-    border_col = theme.ACCENT if is_hover else ((255, 255, 255, 80) if style == 'dream' else (*theme.LINE[:3], 90))
-    pygame.draw.rect(surface, border_col, rect, 1, border_radius=14)
+    draw_r = rect
     if is_hover:
-        glow = pygame.Surface((rect.width + 8, rect.height + 8), pygame.SRCALPHA)
+        ticks = pygame.time.get_ticks()
+        sway_x = round(math.sin(ticks * 0.008 + rect.x) * 1.5)
+        lift_y = -3 + round(math.cos(ticks * 0.008 + rect.y) * 1.0)
+        draw_r = rect.move(sway_x, lift_y)
+
+    alpha = 185 if style == 'dream' else 215
+    draw_glass_panel(surface, draw_r, style=style, border_radius=14, shadow=False, fill_alpha=alpha, specular=True)
+    border_col = theme.ACCENT if is_hover else ((255, 255, 255, 80) if style == 'dream' else (*theme.LINE[:3], 90))
+    pygame.draw.rect(surface, border_col, draw_r, 1, border_radius=14)
+    if is_hover:
+        glow = pygame.Surface((draw_r.width + 8, draw_r.height + 8), pygame.SRCALPHA)
         pygame.draw.rect(glow, (*theme.ACCENT[:3], 35), glow.get_rect(), border_radius=18)
-        surface.blit(glow, (rect.x - 4, rect.y - 4))
+        surface.blit(glow, (draw_r.x - 4, draw_r.y - 4))
 
     lbl_color = theme.ACCENT if is_hover else theme.MUTED
     if font_lbl:
-        text(surface, font_lbl, label.upper(), (rect.x + 12, rect.y + 7), lbl_color)
+        text(surface, font_lbl, label.upper(), (draw_r.x + 12, draw_r.y + 7), lbl_color)
 
     val_color = theme.TEXT
     if font_val:
         v_surf = font_val.render(str(value), True, val_color)
         u_surf = font_unit.render(f" {unit}", True, theme.MUTED) if (unit and font_unit) else None
-        val_y = rect.y + 24
-        surface.blit(v_surf, (rect.x + 12, val_y))
+        val_y = draw_r.y + 24
+        surface.blit(v_surf, (draw_r.x + 12, val_y))
         if u_surf:
-            surface.blit(u_surf, (rect.x + 12 + v_surf.get_width(), val_y + max(0, v_surf.get_height() - u_surf.get_height() - 2)))
+            surface.blit(u_surf, (draw_r.x + 12 + v_surf.get_width(), val_y + max(0, v_surf.get_height() - u_surf.get_height() - 2)))
 
 
 _BUTTON_ANIM: dict[str, dict[str, float]] = {}

@@ -45,8 +45,9 @@ def draw(app):
     animating_ui = (bool(hovered) or bool(hovered_metrics) or app.busy
                     or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None
                     or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
-                    or is_split or drawer_animating or menu_animating)
+                    or is_split or drawer_animating or menu_animating or getattr(app, 'in_main_menu', False))
     time_tick = (pygame.time.get_ticks() // 16) if animating_ui else 0
+    app._ticks = time_tick * 16
     slider_state = (getattr(app, 'bgm_volume', 0.10), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
     ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), app.large_text, app.high_contrast,
               app.stage_index, app.session.moves, app.session.status, app.busy, app.animation.busy,
@@ -212,83 +213,89 @@ draw_frosted_glass_panel = draw_glass_panel
 
 
 def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
-    """Render high-end dimensional isometric jewel logo with glowing halo ellipse, glistening 3D crystal emblem, and aura."""
-    pulse = 0.5 + 0.5 * math.sin(ticks * 0.0032)
+    """Render iconic 3D Bloxorz player block emblem with hovering diamond jewel & orbital ring, enclosed in halo ellipse."""
+    pulse = 0.5 + 0.5 * math.sin(ticks * 0.0035)
 
-    # 1. Enclosing Radiant Elliptical Halo (Logo and emblem sit completely inside)
-    halo_w, halo_h = 370, 140
+    # 1. Radiant Enclosing Elliptical Halo (Emblem and typography fit 100% inside)
+    halo_w, halo_h = 410, 152
     halo_surf = pygame.Surface((halo_w, halo_h), pygame.SRCALPHA)
     for layer in range(4):
-        rw = halo_w - layer * 34
+        rw = halo_w - layer * 32
         rh = halo_h - layer * 16
-        alpha = int((38 + 26 * pulse) / (layer + 1.15))
+        alpha = int((42 + 28 * pulse) / (layer + 1.15))
         glow_color = (*T.ACCENT[:3], alpha)
         pygame.draw.ellipse(halo_surf, glow_color, ((halo_w - rw) // 2, (halo_h - rh) // 2, rw, rh))
-    # Crisp holographic perimeter ring
-    ring_col = (*T.ACCENT[:3], int(65 + 35 * pulse))
+    ring_col = (*T.ACCENT[:3], int(75 + 40 * pulse))
     pygame.draw.ellipse(halo_surf, ring_col, (4, 4, halo_w - 8, halo_h - 8), 1)
-    screen.blit(halo_surf, (cx - halo_w // 2, cy - 42))
+    screen.blit(halo_surf, (cx - halo_w // 2, cy - 66))
 
-    # 2. Silky Smooth 60FPS Isometric 3D Crystal Block Emblem
-    # Gentle, non-laggy sinusoidal float
-    emblem_y = cy - 14 + math.sin(ticks * 0.0028) * 3.2
-    bx, by = cx, emblem_y
+    # 2. Silky Smooth 60FPS 3D Bloxorz Player Block Emblem
+    float_y = math.sin(ticks * 0.003) * 3.5
+    bx, by = cx, cy - 18 + float_y
 
-    # Brilliant Diamond Aura behind crystal cube
-    aura_r = 28
+    # Ambient soft aura behind block
+    aura_r = 30
     cube_aura = pygame.Surface((aura_r * 2 + 16, aura_r * 2 + 16), pygame.SRCALPHA)
-    pygame.draw.circle(cube_aura, (*T.ACCENT[:3], int(65 + 40 * pulse)), (aura_r + 8, aura_r + 8), aura_r + 4)
-    screen.blit(cube_aura, (bx - aura_r - 8, by - aura_r - 4))
+    pygame.draw.circle(cube_aura, (*T.ACCENT[:3], int(55 + 35 * pulse)), (aura_r + 8, aura_r + 8), aura_r + 4)
+    screen.blit(cube_aura, (bx - aura_r - 8, by - aura_r - 2))
 
-    # Rhomboid top face
-    top_pts = [(bx, by - 14), (bx + 18, by - 5), (bx, by + 4), (bx - 18, by - 5)]
-    # Left vertical face
-    left_pts = [(bx - 18, by - 5), (bx, by + 4), (bx, by + 26), (bx - 18, by + 17)]
-    # Right vertical face
-    right_pts = [(bx, by + 4), (bx + 18, by - 5), (bx + 18, by + 17), (bx, by + 26)]
+    # 1x1x2 Upright Player Block Geometry
+    bw, bh_face = 17, 9
+    block_h = 24
+    top_pts = [(bx, by - bh_face), (bx + bw, by - 1), (bx, by + bh_face - 2), (bx - bw, by - 1)]
+    left_pts = [(bx - bw, by - 1), (bx, by + bh_face - 2), (bx, by + block_h), (bx - bw, by + block_h - bh_face + 1)]
+    right_pts = [(bx, by + bh_face - 2), (bx + bw, by - 1), (bx + bw, by + block_h - bh_face + 1), (bx, by + block_h)]
 
-    top_col = lerp_color(T.ACCENT, (255, 255, 255), 0.58)
-    left_col = lerp_color(T.ACCENT, (22, 32, 48) if style != 'dream' else (185, 122, 155), 0.35)
-    right_col = lerp_color(T.ACCENT, (8, 12, 22) if style != 'dream' else (135, 72, 105), 0.65)
+    top_col = lerp_color(T.ACCENT, (255, 255, 255), 0.65)
+    left_col = lerp_color(T.ACCENT, (32, 42, 60) if style != 'dream' else (195, 130, 160), 0.38)
+    right_col = lerp_color(T.ACCENT, (12, 18, 28) if style != 'dream' else (145, 80, 110), 0.68)
 
     pygame.draw.polygon(screen, left_col, left_pts)
     pygame.draw.polygon(screen, right_col, right_pts)
     pygame.draw.polygon(screen, top_col, top_pts)
 
-    # Crystal facet edge glints & specular lines
-    pygame.draw.lines(screen, (255, 255, 255, 225), True, top_pts, 1)
-    pygame.draw.line(screen, (255, 255, 255, 185), (bx, by + 4), (bx, by + 26), 1)
+    # Beveled edges and division seam line (indicating two 1x1 blocks)
+    seam_y = by + block_h // 2 + 2
+    pygame.draw.line(screen, (*T.ACCENT[:3], 150), (bx - bw, seam_y - bh_face + 1), (bx, seam_y))
+    pygame.draw.line(screen, (*T.ACCENT[:3], 120), (bx, seam_y), (bx + bw, seam_y - bh_face + 1))
+    pygame.draw.lines(screen, (255, 255, 255, 230), True, top_pts, 1)
+    pygame.draw.line(screen, (255, 255, 255, 175), (bx, by + bh_face - 2), (bx, by + block_h), 1)
 
-    # Shimmering Holographic Diamond Waist Ring (Orbiting waist ring like in-game companion diamond)
-    ring_y = by + 10
-    ring_rect = pygame.Rect(bx - 26, ring_y - 8, 52, 16)
-    ring_pts = [
-        (bx - 26, ring_y),
-        (bx - 14, ring_y - 6),
-        (bx + 14, ring_y - 6),
-        (bx + 26, ring_y),
-        (bx + 14, ring_y + 6),
-        (bx - 14, ring_y + 6),
-    ]
-    pygame.draw.lines(screen, (*T.ACCENT[:3], int(150 + 80 * pulse)), True, ring_pts, 1)
+    # 3. Hovering 3D Diamond Beacon Jewel above block with Orbital Ring
+    diamond_y = by - 24 + math.sin(ticks * 0.005) * 2.5
+    d_top = (bx, diamond_y - 8)
+    d_bot = (bx, diamond_y + 8)
+    d_left = (bx - 7, diamond_y)
+    d_right = (bx + 7, diamond_y)
+    d_front = (bx, diamond_y + 3)
+    d_back = (bx, diamond_y - 3)
 
-    # Twinkling 4-point star glints on the crystal vertices
+    # Diamond facets
+    pygame.draw.polygon(screen, (255, 255, 255), [d_top, d_left, d_front])
+    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (255, 255, 255), 0.5), [d_top, d_front, d_right])
+    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (80, 20, 50), 0.4), [d_front, d_left, d_bot])
+    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (40, 10, 30), 0.7), [d_front, d_right, d_bot])
+
+    # Orbital Ring encircling the diamond
+    ring_rx, ring_ry = 18, 5
+    ring_surf = pygame.Surface((ring_rx * 2 + 4, ring_ry * 2 + 4), pygame.SRCALPHA)
+    pygame.draw.ellipse(ring_surf, (*T.ACCENT[:3], int(160 + 75 * pulse)), (2, 2, ring_rx * 2, ring_ry * 2), 1)
+    # Orbital moving light mote
+    orb_angle = ticks * 0.006
+    orb_x = ring_rx + 2 + round(math.cos(orb_angle) * ring_rx)
+    orb_y = ring_ry + 2 + round(math.sin(orb_angle) * ring_ry)
+    pygame.draw.circle(ring_surf, (255, 255, 255), (orb_x, orb_y), 2)
+    screen.blit(ring_surf, (bx - ring_rx - 2, diamond_y - ring_ry - 2))
+
+    # Specular sparkling glint stars
     spark_phase = (ticks * 0.005) % (math.pi * 2)
-    for i, (sx, sy) in enumerate(((bx - 18, by - 5), (bx + 18, by - 5), (bx, by + 4))):
-        s_size = 2.5 + 1.5 * math.sin(spark_phase + i * 2.1)
+    for i, (sx, sy) in enumerate(((bx - bw, by - 1), (bx + bw, by - 1), (bx, by + bh_face - 2), (bx, diamond_y - 8))):
+        s_size = 2.4 + 1.4 * math.sin(spark_phase + i * 2.0)
         if s_size > 2.0:
             pygame.draw.line(screen, (255, 255, 255), (sx - s_size, sy), (sx + s_size, sy), 1)
             pygame.draw.line(screen, (255, 255, 255), (sx, sy - s_size), (sx, sy + s_size), 1)
 
-    # Floating beacon diamond on top of the block
-    beacon_y = by - 24 + math.sin(ticks * 0.005) * 2.2
-    beacon_pts = [(bx, beacon_y - 6), (bx + 5, beacon_y), (bx, beacon_y + 6), (bx - 5, beacon_y)]
-    pygame.draw.polygon(screen, (255, 255, 255), beacon_pts)
-    beacon_glow = pygame.Surface((20, 20), pygame.SRCALPHA)
-    pygame.draw.circle(beacon_glow, (*T.ACCENT[:3], int(120 + 70 * pulse)), (10, 10), 8)
-    screen.blit(beacon_glow, (bx - 10, beacon_y - 10))
-
-    # 3. Dimensional Typography: "BLOXORZ" + Frosted Glass [ 3D ] Capsule Badge
+    # 4. Dimensional Typography: "BLOXORZ" + Frosted Glass [ 3D ] Capsule Badge (Inside ellipse)
     t_surf = display.render("BLOXORZ", True, T.TEXT)
     shadow_col = (0, 0, 0, 75) if style != 'dream' else (160, 120, 140, 65)
     t_shadow = display.render("BLOXORZ", True, shadow_col)
@@ -296,11 +303,10 @@ def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
     badge_w, badge_h = 48, 26
     total_w = t_surf.get_width() + 12 + badge_w
     t_x = cx - total_w // 2
-    t_y = cy + 34
+    t_y = cy + 20
 
-    # Shadow layer
+    # Shadow and front text
     screen.blit(t_shadow, (t_x, t_y + 2))
-    # Crisp front layer
     screen.blit(t_surf, (t_x, t_y))
 
     # Frosted [ 3D ] pill badge
@@ -308,10 +314,6 @@ def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
     draw_glass_panel(screen, badge_rect, style=style, border_radius=13, shadow=False, fill_alpha=120)
     badge_3d = heading.render("3D", True, T.ACCENT)
     screen.blit(badge_3d, badge_3d.get_rect(center=badge_rect.center))
-
-    # 4. Refined Subtitle
-    sub_surf = caption.render("—   SPATIAL LOGIC & SEARCH SIMULATION   —", True, T.MUTED)
-    screen.blit(sub_surf, sub_surf.get_rect(center=(cx, cy + 74)))
 
 
 def draw_main_menu(app):
@@ -340,8 +342,8 @@ def draw_main_menu(app):
     # When modal is active (Settings/Help/Stage), suppress background elements completely to avoid any text ghosting
     modal_active = bool(app.stage_picker or app.menu)
     if not modal_active:
-        ticks = pygame.time.get_ticks()
-        draw_bloxorz_logo(screen, card_rect.centerx, card_rect.y + 44, ticks, style, display, heading, caption)
+        ticks = getattr(app, '_ticks', pygame.time.get_ticks())
+        draw_bloxorz_logo(screen, card_rect.centerx, card_rect.y + 70, ticks, style, display, heading, caption)
 
         btn_w = mw - 72
         btn_x = card_rect.x + 36
@@ -360,20 +362,26 @@ def draw_main_menu(app):
         menu_btn('settings', "Audio & Settings", start_y + 52 + btn_gap + (46 + btn_gap), kind='pill', height=46, icon='settings')
         menu_btn('help', "How to Play & Controls", start_y + 52 + btn_gap + (46 + btn_gap) * 2, kind='pill', height=46, icon='help')
 
-        # Theme quick cycler at bottom of card
+        # Theme quick cycler and Exit Game button side-by-side at bottom of card
         theme_name = NAMES.get(style, style)
-        b_th = Button('theme', f'Theme: {theme_name}', pygame.Rect(btn_x, card_rect.bottom - 46, btn_w, 34), True, False, 'pill', icon='theme')
+        bw = (btn_w - 12) // 2
+        b_th = Button('theme', f'Theme: {theme_name}', pygame.Rect(btn_x, card_rect.bottom - 48, bw, 36), True, False, 'pill', icon='theme')
+        b_ex = Button('exit_game', 'Exit Game', pygame.Rect(btn_x + bw + 12, card_rect.bottom - 48, bw, 36), True, False, 'pill', icon='close')
         app.buttons.append(b_th)
+        app.buttons.append(b_ex)
         b_th.draw(screen, caption)
+        b_ex.draw(screen, caption)
 
     # Keyboard shortcut guide at bottom of screen
-    hint = caption.render("Space / Enter: Play  ·  Esc: Game  ·  T: Theme  ·  S: Settings  ·  H: Help", True, T.MUTED)
+    hint = caption.render("Space / Enter: Play  ·  Esc: Game  ·  T: Theme  ·  S: Settings  ·  H: Help  ·  Q: Exit", True, T.MUTED)
     screen.blit(hint, hint.get_rect(center=(w // 2, h - 20)))
 
 
 def _draw(app):
     screen = app.screen
     w, h = screen.get_size()
+    mouse = pygame.mouse.get_pos()
+    ticks = getattr(app, '_ticks', 0)
     body = T.font('body', app.large_text)
     heading = T.font('heading', app.large_text)
     display = T.font('display', app.large_text)
@@ -391,6 +399,7 @@ def _draw(app):
         return b
 
     app.buttons = []
+    app.metric_rects = []
     app.seek_rect = pygame.Rect(0, 0, 0, 0)
     style = getattr(app, 'visual_style', 'dream')
     forest = style in ('forest', 'forest_gl')
@@ -448,7 +457,6 @@ def _draw(app):
         draw_rect = app.board_rect
         if getattr(app, 'trauma', 0.0) > 0.01:
             intensity = app.trauma ** 1.5
-            ticks = pygame.time.get_ticks()
             shake_x = round(math.sin(ticks * 0.048) * 2.5 * intensity)
             shake_y = round(math.cos(ticks * 0.062) * 1.8 * intensity)
             draw_rect = app.board_rect.move(shake_x, shake_y)
@@ -458,11 +466,20 @@ def _draw(app):
     header_y = 16
     header_h = 42
 
-    # Left: Logo capsule with miniature animated crystal jewel
-    logo_w = 146
+    # Left: Logo capsule with animated crystal jewel & hover sway
+    logo_w = 162
     logo_rect = pygame.Rect(16, header_y, logo_w, header_h)
-    draw_glass_panel(screen, logo_rect, style=style, border_radius=21, shadow=False)
-    mini_bx, mini_by = 16 + 22, header_y + 21
+    app.metric_rects.append(logo_rect)
+    logo_hover = logo_rect.collidepoint(mouse)
+    draw_logo_rect = logo_rect.move(round(math.sin(ticks * 0.008) * 1.5), round(math.cos(ticks * 0.008) * 1.5)) if logo_hover else logo_rect
+
+    draw_glass_panel(screen, draw_logo_rect, style=style, border_radius=21, shadow=False)
+    if logo_hover:
+        pygame.draw.rect(screen, (*T.ACCENT[:3], 130), draw_logo_rect, 1, border_radius=21)
+
+    # Mini 3D emblem with smooth floating bobbing animation
+    mini_bob = math.sin(ticks * 0.005) * 2.8
+    mini_bx, mini_by = draw_logo_rect.x + 22, draw_logo_rect.centery + mini_bob
     mini_top = [(mini_bx, mini_by - 7), (mini_bx + 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx - 9, mini_by - 2)]
     mini_left = [(mini_bx - 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx, mini_by + 11), (mini_bx - 9, mini_by + 6)]
     mini_right = [(mini_bx, mini_by + 2), (mini_bx + 9, mini_by - 2), (mini_bx + 9, mini_by + 6), (mini_bx, mini_by + 11)]
@@ -470,21 +487,30 @@ def _draw(app):
     pygame.draw.polygon(screen, lerp_color(T.ACCENT, (8, 12, 22) if style != 'dream' else (135, 72, 105), 0.65), mini_right)
     pygame.draw.polygon(screen, lerp_color(T.ACCENT, (255, 255, 255), 0.58), mini_top)
     pygame.draw.lines(screen, (255, 255, 255, 200), True, mini_top, 1)
+
+    # Sparkling glint on mini cube apex
+    pygame.draw.circle(screen, (255, 255, 255), (round(mini_bx), round(mini_by - 7)), 1)
     logo_title = heading.render("BLOXORZ", True, T.TEXT)
-    screen.blit(logo_title, (mini_bx + 16, header_y + (header_h - logo_title.get_height()) // 2))
+    screen.blit(logo_title, (draw_logo_rect.x + 38, draw_logo_rect.y + (header_h - logo_title.get_height()) // 2))
 
     # Menu button capsule
     menu_btn_x = 16 + logo_w + 10
     button('main_menu', 'Menu', menu_btn_x, header_y, 88, kind='pill', height=header_h, icon='menu')
 
-    # Stage and Moves info capsule
+    # Stage and Moves info capsule with hover sway
     stat_x = menu_btn_x + 88 + 10
-    stat_w = 196
+    stat_w = 200
     stat_rect = pygame.Rect(stat_x, header_y, stat_w, header_h)
-    draw_glass_panel(screen, stat_rect, style=style, border_radius=21, shadow=False)
+    app.metric_rects.append(stat_rect)
+    stat_hover = stat_rect.collidepoint(mouse)
+    draw_stat_rect = stat_rect.move(round(math.sin(ticks * 0.008 + 1.2) * 1.5), round(math.cos(ticks * 0.008 + 1.2) * 1.5)) if stat_hover else stat_rect
+
+    draw_glass_panel(screen, draw_stat_rect, style=style, border_radius=21, shadow=False)
+    if stat_hover:
+        pygame.draw.rect(screen, (*T.ACCENT[:3], 130), draw_stat_rect, 1, border_radius=21)
     stat_text = f"STAGE {app.stage_index + 1:02}  ·  {app.session.moves} MOVES"
     stat_surf = body.render(stat_text, True, T.TEXT)
-    screen.blit(stat_surf, stat_surf.get_rect(center=stat_rect.center))
+    screen.blit(stat_surf, stat_surf.get_rect(center=draw_stat_rect.center))
 
     # Navigation buttons on the right of the header
     nav_right = w - 16
@@ -555,10 +581,11 @@ def _draw(app):
             card_h += 8
         card_h = min(card_h, h - 96)
 
-        card_rect = pygame.Rect(panel_x - 16, 80, T.PANEL_WIDTH + 32, card_h)
+        card_y = max(76, min(h - card_h - 70, (h - card_h) // 2))
+        card_rect = pygame.Rect(panel_x - 16, card_y, T.PANEL_WIDTH + 32, card_h)
         draw_glass_panel(screen, card_rect, style, border_radius=22, shadow=False)
 
-        x, pw, y = panel_x, T.PANEL_WIDTH, 80
+        x, pw, y = panel_x, T.PANEL_WIDTH, card_y
         pygame.draw.line(screen, T.LINE, (x + 8, y + 40), (x + pw - 8, y + 40))
 
         # Close solver drawer button (Working close button!)
@@ -587,13 +614,21 @@ def _draw(app):
             m = app.result.metrics
             label('A way forward', x + 4, y + 6, f=heading)
 
-            # Elegant Featured Solution Summary Card
+            # Elegant Featured Solution Summary Card with Hover Lift & Sway
             sol_rect = pygame.Rect(x, y + 44, pw, 58)
-            draw_glass_panel(screen, sol_rect, style=style, border_radius=16, shadow=False, fill_alpha=160)
-            pygame.draw.rect(screen, (*T.ACCENT[:3], 120), sol_rect, 1, border_radius=16)
-            text(screen, caption, "OPTIMAL SOLUTION READY", (sol_rect.x + 14, sol_rect.y + 10), T.ACCENT)
+            app.metric_rects.append(sol_rect)
+            sol_hover = sol_rect.collidepoint(mouse)
+            draw_sol = sol_rect.move(round(math.sin(ticks * 0.008) * 1.5), -3 + round(math.cos(ticks * 0.008) * 1.0)) if sol_hover else sol_rect
+
+            draw_glass_panel(screen, draw_sol, style=style, border_radius=16, shadow=sol_hover, fill_alpha=185 if sol_hover else 160)
+            if sol_hover:
+                sol_glow = pygame.Surface((draw_sol.width + 10, draw_sol.height + 10), pygame.SRCALPHA)
+                pygame.draw.rect(sol_glow, (*T.ACCENT[:3], 45), sol_glow.get_rect(), border_radius=20)
+                screen.blit(sol_glow, (draw_sol.x - 5, draw_sol.y - 5))
+            pygame.draw.rect(screen, (*T.ACCENT[:3], 200 if sol_hover else 120), draw_sol, 1, border_radius=16)
+            text(screen, caption, "OPTIMAL SOLUTION READY", (draw_sol.x + 14, draw_sol.y + 10), T.ACCENT)
             alg_label = {'ASTAR': 'A*'}.get(app.result.algorithm, app.result.algorithm)
-            text(screen, heading, f"{m.solution_length} Moves  ·  {alg_label}", (sol_rect.x + 14, sol_rect.y + 28), T.TEXT)
+            text(screen, heading, f"{m.solution_length} Moves  ·  {alg_label}", (draw_sol.x + 14, draw_sol.y + 28), T.TEXT)
 
             button('solution', 'Watch solution', x, y + 116, pw, idle, 'primary', icon='play')
             button('details', ('−' if app.details_open else '+') + '  Result details', x, y + 168, pw, kind='dock_item')
@@ -601,10 +636,15 @@ def _draw(app):
             if app.details_open:
                 bw = (pw - 8) // 2
                 bh = 50
-                draw_bento_card(screen, pygame.Rect(x, offset, bw, bh), 'TIME', f'{m.time_sec:.3f}', 's', style, caption, mono, caption)
-                draw_bento_card(screen, pygame.Rect(x + bw + 8, offset, bw, bh), 'RAM', f'{m.peak_memory_mb:.2f}', 'MB', style, caption, mono, caption)
-                draw_bento_card(screen, pygame.Rect(x, offset + bh + 8, bw, bh), 'EXPANDED', f'{m.expanded_nodes}', '', style, caption, mono, caption)
-                draw_bento_card(screen, pygame.Rect(x + bw + 8, offset + bh + 8, bw, bh), 'COST', f'{m.total_cost:g}', '', style, caption, mono, caption)
+                r_time = pygame.Rect(x, offset, bw, bh)
+                r_ram = pygame.Rect(x + bw + 8, offset, bw, bh)
+                r_exp = pygame.Rect(x, offset + bh + 8, bw, bh)
+                r_cost = pygame.Rect(x + bw + 8, offset + bh + 8, bw, bh)
+                app.metric_rects.extend([r_time, r_ram, r_exp, r_cost])
+                draw_bento_card(screen, r_time, 'TIME', f'{m.time_sec:.3f}', 's', style, caption, mono, caption)
+                draw_bento_card(screen, r_ram, 'RAM', f'{m.peak_memory_mb:.2f}', 'MB', style, caption, mono, caption)
+                draw_bento_card(screen, r_exp, 'EXPANDED', f'{m.expanded_nodes}', '', style, caption, mono, caption)
+                draw_bento_card(screen, r_cost, 'COST', f'{m.total_cost:g}', '', style, caption, mono, caption)
                 offset += (bh * 2 + 16)
             button('new_search', 'Try another algorithm', x, offset + 10, pw, idle, 'quiet')
         else:
@@ -612,9 +652,10 @@ def _draw(app):
             label('ALGORITHM', x, y + 42, T.MUTED, f=caption)
             button('algorithm_menu', {'ASTAR': 'A*'}.get(app.algorithm, app.algorithm) + '   ', x, y + 68, pw, manual)
             label('START FROM', x, y + 128, T.MUTED, f=caption)
-            button('source_start', 'Start', x, y + 154, 126, manual, selected=not app.solve_current)
-            button('source_current', 'Current', x + 134, y + 154, 126, manual, selected=app.solve_current)
-            button('solve', 'Solve   >', x, y + 224, pw, manual, 'primary')
+            src_btn_w = (pw - 12) // 2
+            button('source_start', 'Start', x, y + 154, src_btn_w, manual, selected=not app.solve_current)
+            button('source_current', 'Current', x + src_btn_w + 12, y + 154, src_btn_w, manual, selected=app.solve_current)
+            button('solve_now', 'Solve   >', x, y + 224, pw, manual, 'primary')
             if app.solver_status in (SolverStatus.ERROR, SolverStatus.TIMEOUT, SolverStatus.NO_SOLUTION, SolverStatus.CANCELLED):
                 status = {SolverStatus.ERROR: 'Search failed. Please retry.', SolverStatus.TIMEOUT: 'Search time limit reached.',
                           SolverStatus.NO_SOLUTION: 'No solution found.', SolverStatus.CANCELLED: 'Search cancelled.'}
@@ -776,17 +817,32 @@ def _draw_modals(app, screen, w, h, style, heading, body, mono, caption, idle):
 
             def draw_help_card(cx, cy, card_title, icon_name, items):
                 card_r = pygame.Rect(cx, cy, grid_w, grid_h)
-                draw_glass_panel(screen, card_r, style=style, border_radius=18, shadow=False, fill_alpha=95)
+                app.metric_rects.append(card_r)
+                card_hover = card_r.collidepoint(mouse)
+                draw_r = card_r
+                if card_hover:
+                    ticks = pygame.time.get_ticks()
+                    sway_x = round(math.sin(ticks * 0.007 + cx) * 1.8)
+                    lift_y = -4 + round(math.cos(ticks * 0.008 + cy) * 1.2)
+                    draw_r = card_r.move(sway_x, lift_y)
+
+                draw_glass_panel(screen, draw_r, style=style, border_radius=18, shadow=card_hover, fill_alpha=110 if card_hover else 95)
+                if card_hover:
+                    glow = pygame.Surface((draw_r.width + 10, draw_r.height + 10), pygame.SRCALPHA)
+                    pygame.draw.rect(glow, (*T.ACCENT[:3], 35), glow.get_rect(), border_radius=22)
+                    screen.blit(glow, (draw_r.x - 5, draw_r.y - 5))
+                    pygame.draw.rect(screen, (*T.ACCENT[:3], 150), draw_r, 1, border_radius=18)
+
                 # Header badge
-                icon_rect = pygame.Rect(cx + 12, cy + 12, 28, 28)
+                icon_rect = pygame.Rect(draw_r.x + 12, draw_r.y + 12, 28, 28)
                 draw_glass_panel(screen, icon_rect, style=style, border_radius=8, shadow=False, fill_alpha=120)
                 draw_vector_icon(screen, icon_name, icon_rect.center, T.ACCENT, size=13)
-                label(card_title, cx + 48, cy + 16, color=T.TEXT, f=heading)
-                pygame.draw.line(screen, (*T.LINE[:3], 60), (cx + 12, cy + 46), (cx + grid_w - 12, cy + 46), 1)
+                label(card_title, draw_r.x + 48, draw_r.y + 16, color=T.TEXT, f=heading)
+                pygame.draw.line(screen, (*T.LINE[:3], 60), (draw_r.x + 12, draw_r.y + 46), (draw_r.x + grid_w - 12, draw_r.y + 46), 1)
 
-                item_y = cy + 52
+                item_y = draw_r.y + 52
                 for key_tag, desc in items:
-                    chip_rect = pygame.Rect(cx + 10, item_y, grid_w - 20, 36)
+                    chip_rect = pygame.Rect(draw_r.x + 10, item_y, grid_w - 20, 36)
                     chip_hover = chip_rect.collidepoint(mouse)
 
                     chip_bg = pygame.Surface((chip_rect.width, chip_rect.height), pygame.SRCALPHA)
