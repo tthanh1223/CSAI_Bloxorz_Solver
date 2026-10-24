@@ -351,12 +351,10 @@ def draw_main_menu(app):
     display = T.font('display', app.large_text)
     caption = T.font('caption', app.large_text)
 
-    # Central Frosted Glass Card - calm, tranquil breathing hover (low sensitivity, zero jitter)
-    ticks = getattr(app, '_ticks', pygame.time.get_ticks())
+    # Central Frosted Glass Card - stationary, stable and perfectly centered
     mw = min(480, w - 40)
     mh = min(540, h - 40)
-    card_float_y = round(math.sin(ticks * 0.0011) * 1.5)
-    card_rect = pygame.Rect((w - mw) // 2, (h - mh) // 2 + card_float_y, mw, mh)
+    card_rect = pygame.Rect((w - mw) // 2, (h - mh) // 2, mw, mh)
     draw_glass_panel(screen, card_rect, style=style, border_radius=28, shadow=True, fill_alpha=190 if style == 'dream' else 215)
 
     # When modal is active (Settings/Help/Stage), suppress background elements completely to avoid any text ghosting
