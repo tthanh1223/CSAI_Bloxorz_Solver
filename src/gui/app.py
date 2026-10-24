@@ -592,9 +592,10 @@ class BloxorzApp:
                 self.replay_step()
                 self.wait = 0.12 / self.speed
         target_drawer = 1.0 if self.solver_open else 0.0
-        self.drawer_t += (target_drawer - self.drawer_t) * min(1.0, dt * 11.0)
-        target_cam = -88.0 * self.drawer_t
-        self.camera_pan_x += (target_cam - self.camera_pan_x) * min(1.0, dt * 11.0)
+        self.drawer_t += (target_drawer - self.drawer_t) * min(1.0, dt * 14.0)
+        if abs(self.drawer_t - target_drawer) < 0.002:
+            self.drawer_t = target_drawer
+        self.camera_pan_x = 0.0
         target_menu = 1.0 if self.in_main_menu else 0.0
         self.menu_t += (target_menu - self.menu_t) * min(1.0, dt * 9.0)
 

@@ -49,7 +49,8 @@ def draw(app):
     time_tick = (pygame.time.get_ticks() // 16) if animating_ui else 0
     app._ticks = time_tick * 16
     slider_state = (getattr(app, 'bgm_volume', 0.10), getattr(app, 'sfx_volume', 0.85), getattr(app, 'active_slider', None))
-    ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), app.large_text, app.high_contrast,
+    renderer_view = getattr(app.renderer, 'view', 'iso')
+    ui_key = (getattr(app, 'visual_style', 'dream'), app.screen.get_size(), renderer_view, app.large_text, app.high_contrast,
               app.stage_index, app.session.moves, app.session.status, app.busy, app.animation.busy,
               app.replay.status, app.replay.index, app.replay.length, app.speed, app.message,
               app.algorithm, app.solve_current, id(app.result), app.details_open, app.solver_status,
@@ -63,8 +64,8 @@ def draw(app):
                        or (hasattr(app, 'bridge_view') and app.bridge_view() is not None)
                        or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
                        or is_split or animating_idle_beacon or drawer_animating)
-    eff_pan = (app.pan[0] + getattr(app, 'camera_pan_x', 0.0), app.pan[1])
-    board_key = (app.session.current_state, app.animation.frame, app.zoom, tuple(eff_pan), animating_board)
+    eff_pan = tuple(app.pan)
+    board_key = (app.session.current_state, app.animation.frame, app.zoom, eff_pan, animating_board, renderer_view)
     cached = getattr(app, '_presentation_cache', None)
     if cached and cached[0] == ui_key and not (app.menu or app.stage_picker or app.dropdown_open or app.win_phase == 'choice'):
         if not animating_board and cached[1] == board_key:
@@ -73,13 +74,15 @@ def draw(app):
             app._presentation_cache = (ui_key, board_key, cached[2])
             return True
         app.screen.blit(cached[2], (0, 0))
-        rect = app.board_rect
+        drawer_t = getattr(app, 'drawer_t', 1.0 if getattr(app, 'solver_open', False) else 0.0)
+        shift_x = round(-(T.PANEL_WIDTH + 24) // 2 * drawer_t)
+        rect = app.board_rect.move(shift_x, 0)
         if getattr(app, 'trauma', 0.0) > 0.01:
             intensity = app.trauma ** 1.5
             ticks = pygame.time.get_ticks()
             shake_x = round(math.sin(ticks * 0.048) * 2.5 * intensity)
             shake_y = round(math.cos(ticks * 0.062) * 1.8 * intensity)
-            rect = app.board_rect.move(shake_x, shake_y)
+            rect = rect.move(shake_x, shake_y)
         app.screen.blit(scene(app), rect, rect)
         board = app._board_surface
         app.renderer.zoom, app.renderer.pan = app.zoom, eff_pan
@@ -229,37 +232,47 @@ def draw_bloxorz_logo(screen, cx, cy, ticks, style, display, heading, caption):
     pygame.draw.ellipse(halo_surf, ring_col, (4, 4, halo_w - 8, halo_h - 8), 1)
     screen.blit(halo_surf, (cx - halo_w // 2, cy - 66))
 
-    # 2. Silky Smooth 60FPS 3D Bloxorz Player Block Emblem
+    # 2. Silky Smooth 60FPS 3D Bloxorz Player Block Emblem (1x1 unit of player block with authentic terrazzo crystal textures)
     float_y = math.sin(ticks * 0.003) * 3.5
-    bx, by = cx, cy - 18 + float_y
+    bx, by = cx, cy - 14 + float_y
 
     # Ambient soft aura behind block
-    aura_r = 30
+    aura_r = 32
     cube_aura = pygame.Surface((aura_r * 2 + 16, aura_r * 2 + 16), pygame.SRCALPHA)
-    pygame.draw.circle(cube_aura, (*T.ACCENT[:3], int(55 + 35 * pulse)), (aura_r + 8, aura_r + 8), aura_r + 4)
+    pygame.draw.circle(cube_aura, (*T.ACCENT[:3], int(65 + 35 * pulse)), (aura_r + 8, aura_r + 8), aura_r + 4)
     screen.blit(cube_aura, (bx - aura_r - 8, by - aura_r - 2))
 
-    # 1x1x2 Upright Player Block Geometry
-    bw, bh_face = 17, 9
-    block_h = 24
+    # 1x1 Isometric Player Block Geometry
+    bw, bh_face = 20, 11
+    block_h = 22
     top_pts = [(bx, by - bh_face), (bx + bw, by - 1), (bx, by + bh_face - 2), (bx - bw, by - 1)]
     left_pts = [(bx - bw, by - 1), (bx, by + bh_face - 2), (bx, by + block_h), (bx - bw, by + block_h - bh_face + 1)]
     right_pts = [(bx, by + bh_face - 2), (bx + bw, by - 1), (bx + bw, by + block_h - bh_face + 1), (bx, by + block_h)]
 
-    top_col = lerp_color(T.ACCENT, (255, 255, 255), 0.65)
-    left_col = lerp_color(T.ACCENT, (32, 42, 60) if style != 'dream' else (195, 130, 160), 0.38)
-    right_col = lerp_color(T.ACCENT, (12, 18, 28) if style != 'dream' else (145, 80, 110), 0.68)
+    top_col = lerp_color(T.ACCENT, (255, 240, 248), 0.75) if style == 'dream' else ((225, 245, 255) if style == 'blueprint' else (240, 255, 230))
+    left_col = lerp_color(T.ACCENT, (215, 140, 175) if style == 'dream' else ((60, 150, 215) if style == 'blueprint' else (90, 175, 105)), 0.50)
+    right_col = lerp_color(T.ACCENT, (135, 65, 100) if style == 'dream' else ((25, 80, 140) if style == 'blueprint' else (45, 105, 55)), 0.80)
 
     pygame.draw.polygon(screen, left_col, left_pts)
     pygame.draw.polygon(screen, right_col, right_pts)
     pygame.draw.polygon(screen, top_col, top_pts)
 
-    # Beveled edges and division seam line (indicating two 1x1 blocks)
-    seam_y = by + block_h // 2 + 2
-    pygame.draw.line(screen, (*T.ACCENT[:3], 150), (bx - bw, seam_y - bh_face + 1), (bx, seam_y))
-    pygame.draw.line(screen, (*T.ACCENT[:3], 120), (bx, seam_y), (bx + bw, seam_y - bh_face + 1))
-    pygame.draw.lines(screen, (255, 255, 255, 230), True, top_pts, 1)
-    pygame.draw.line(screen, (255, 255, 255, 175), (bx, by + bh_face - 2), (bx, by + block_h), 1)
+    # Authentic terrazzo speckle flecks (matching game player block)
+    speckles = [
+        (-12, 4, 1), (-5, 12, 1), (-8, 18, 2), (-15, 11, 1),
+        (5, 7, 1), (12, 14, 1), (7, 19, 2), (14, 8, 1),
+        (-6, -4, 1), (6, -2, 1), (0, 3, 2), (8, 2, 1)
+    ]
+    sp_col = (255, 255, 255, 190)
+    for sx, sy, sr in speckles:
+        pygame.draw.circle(screen, sp_col, (round(bx + sx), round(by + sy)), sr)
+
+    # Luminous division seam line & beveled specular edges
+    seam_y = by + block_h // 2 + 1
+    pygame.draw.line(screen, (*T.ACCENT[:3], 160), (bx - bw, seam_y - bh_face + 1), (bx, seam_y))
+    pygame.draw.line(screen, (*T.ACCENT[:3], 130), (bx, seam_y), (bx + bw, seam_y - bh_face + 1))
+    pygame.draw.lines(screen, (255, 255, 255, 240), True, top_pts, 1)
+    pygame.draw.line(screen, (255, 255, 255, 180), (bx, by + bh_face - 2), (bx, by + block_h), 1)
 
     # 3. Hovering 3D Diamond Beacon Jewel above block with Orbital Ring
     diamond_y = by - 24 + math.sin(ticks * 0.005) * 2.5
@@ -333,10 +346,12 @@ def draw_main_menu(app):
     display = T.font('display', app.large_text)
     caption = T.font('caption', app.large_text)
 
-    # Central Frosted Glass Card
+    # Central Frosted Glass Card - continuous gentle breathing hover
+    ticks = getattr(app, '_ticks', pygame.time.get_ticks())
     mw = min(480, w - 40)
     mh = min(540, h - 40)
-    card_rect = pygame.Rect((w - mw) // 2, (h - mh) // 2, mw, mh)
+    card_float_y = round(math.sin(ticks * 0.0022) * 4.5)
+    card_rect = pygame.Rect((w - mw) // 2, (h - mh) // 2 + card_float_y, mw, mh)
     draw_glass_panel(screen, card_rect, style=style, border_radius=28, shadow=True, fill_alpha=190 if style == 'dream' else 215)
 
     # When modal is active (Settings/Help/Stage), suppress background elements completely to avoid any text ghosting
@@ -440,13 +455,15 @@ def _draw(app):
     center_w = panel_x if is_drawer_visible else w
 
     # Map viewport: starts strictly at y=80 below top veil and ends before bottom toast/dock
-    app.board_rect = pygame.Rect(0, 80, panel_x - 16 if is_drawer_visible else w, h - 182)
+    drawer_t = getattr(app, 'drawer_t', 1.0 if is_drawer_visible else 0.0)
+    shift_x = round(-(T.PANEL_WIDTH + 24) // 2 * drawer_t)
+    app.board_rect = pygame.Rect(0, 80, w, h - 182)
     board = getattr(app, '_board_surface', None)
     if board is None or board.get_size() != app.board_rect.size:
         board = pygame.Surface(app.board_rect.size, pygame.SRCALPHA)
         app._board_surface = board
 
-    eff_pan = (app.pan[0] + getattr(app, 'camera_pan_x', 0.0), app.pan[1])
+    eff_pan = tuple(app.pan)
     app.renderer.zoom, app.renderer.pan = app.zoom, eff_pan
     app.renderer.high_contrast = app.high_contrast
     if not sharp_board(app):
@@ -454,12 +471,12 @@ def _draw(app):
         app.renderer.draw(board, app.session.current_state, app.animation.frame,
                           intro_t=getattr(app, 'intro_t', None), outro_t=app.board_outro() if hasattr(app, 'board_outro') else None,
                           shockwave=getattr(app, 'shockwave', None), bridges=app.bridge_view() if hasattr(app, 'bridge_view') else None)
-        draw_rect = app.board_rect
+        draw_rect = app.board_rect.move(shift_x, 0)
         if getattr(app, 'trauma', 0.0) > 0.01:
             intensity = app.trauma ** 1.5
             shake_x = round(math.sin(ticks * 0.048) * 2.5 * intensity)
             shake_y = round(math.cos(ticks * 0.062) * 1.8 * intensity)
-            draw_rect = app.board_rect.move(shake_x, shake_y)
+            draw_rect = draw_rect.move(shake_x, shake_y)
         screen.blit(board, draw_rect)
 
     # 1. Single Unified In-game Header Row (y = 16, height = 42)
@@ -477,8 +494,9 @@ def _draw(app):
     if logo_hover:
         pygame.draw.rect(screen, (*T.ACCENT[:3], 130), draw_logo_rect, 1, border_radius=21)
 
-    # Mini 3D emblem with smooth floating bobbing animation
-    mini_bob = math.sin(ticks * 0.005) * 2.8
+    # Mini 3D emblem with smooth floating bobbing animation (always bobs continuously)
+    bob_ticks = pygame.time.get_ticks() if getattr(app, 'running', False) else ticks
+    mini_bob = math.sin(bob_ticks * 0.005) * 2.8
     mini_bx, mini_by = draw_logo_rect.x + 22, draw_logo_rect.centery + mini_bob
     mini_top = [(mini_bx, mini_by - 7), (mini_bx + 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx - 9, mini_by - 2)]
     mini_left = [(mini_bx - 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx, mini_by + 11), (mini_bx - 9, mini_by + 6)]
@@ -497,9 +515,9 @@ def _draw(app):
     menu_btn_x = 16 + logo_w + 10
     button('main_menu', 'Menu', menu_btn_x, header_y, 88, kind='pill', height=header_h, icon='menu')
 
-    # Stage and Moves info capsule with hover sway
+    # Moves info capsule with hover sway (compact and cleanly focused on move count)
     stat_x = menu_btn_x + 88 + 10
-    stat_w = 200
+    stat_w = 126
     stat_rect = pygame.Rect(stat_x, header_y, stat_w, header_h)
     app.metric_rects.append(stat_rect)
     stat_hover = stat_rect.collidepoint(mouse)
@@ -508,17 +526,18 @@ def _draw(app):
     draw_glass_panel(screen, draw_stat_rect, style=style, border_radius=21, shadow=False)
     if stat_hover:
         pygame.draw.rect(screen, (*T.ACCENT[:3], 130), draw_stat_rect, 1, border_radius=21)
-    stat_text = f"STAGE {app.stage_index + 1:02}  ·  {app.session.moves} MOVES"
+    stat_text = f"{app.session.moves} MOVES"
     stat_surf = body.render(stat_text, True, T.TEXT)
     screen.blit(stat_surf, stat_surf.get_rect(center=draw_stat_rect.center))
 
-    # Navigation buttons on the right of the header
+    # Navigation buttons on the right of the header (including Exit button)
     nav_right = w - 16
-    button('help', 'Help', nav_right - 84, header_y, 84, kind='pill', height=header_h, icon='help')
-    button('settings', 'Settings', nav_right - 84 - 8 - 110, header_y, 110, kind='pill', height=header_h, icon='settings')
+    button('exit_game', 'Exit', nav_right - 72, header_y, 72, kind='pill', height=header_h, icon='close')
+    button('help', 'Help', nav_right - 72 - 8 - 84, header_y, 84, kind='pill', height=header_h, icon='help')
+    button('settings', 'Settings', nav_right - 72 - 8 - 84 - 8 - 110, header_y, 110, kind='pill', height=header_h, icon='settings')
     theme_text = {'dream': 'Dream City', 'forest': 'Forest Ruins', 'blueprint': 'Blueprint', 'forest_gl': 'OpenGL'}.get(style, style)
-    button('theme', theme_text, nav_right - 84 - 8 - 110 - 8 - 140, header_y, 140, style != 'forest_gl', kind='pill', height=header_h, icon='theme')
-    button('choose', f'Stage {app.stage_index + 1:02}', nav_right - 84 - 8 - 110 - 8 - 140 - 8 - 124, header_y, 124, bool(app.stage_paths), kind='pill', height=header_h, icon='view')
+    button('theme', theme_text, nav_right - 72 - 8 - 84 - 8 - 110 - 8 - 140, header_y, 140, style != 'forest_gl', kind='pill', height=header_h, icon='theme')
+    button('choose', f'Stage {app.stage_index + 1:02}', nav_right - 72 - 8 - 84 - 8 - 110 - 8 - 140 - 8 - 124, header_y, 124, bool(app.stage_paths), kind='pill', height=header_h, icon='view')
 
     # Centered Toast notification: Strictly stacked ABOVE bottom dock (y = h - 96, height = 26)
     message = app.message
