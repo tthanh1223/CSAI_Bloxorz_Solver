@@ -281,10 +281,10 @@ class Button:
         pressed = hover and pygame.mouse.get_pressed()[0]
 
         # Smooth interactive animation tracking (60fps ease)
-        btn_id = f"{self.key}_{self.rect.x}_{self.rect.y}"
+        btn_id = f"{self.key}_{self.kind}"
         anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0, 'ripple': 0.0})
-        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.40
-        anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.50
+        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.25
+        anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.35
         if pressed:
             anim['ripple'] = min(1.0, anim.get('ripple', 0.0) + 0.16)
         else:
@@ -297,15 +297,9 @@ class Button:
         p_t = anim['press']
         rip_t = anim['ripple']
 
-        # Physical translation: lift up smoothly on hover, depress down on click
-        # Breakthrough dynamic floating & swaying micro-animation on hover
-        ticks = pygame.time.get_ticks()
-        float_y = math.sin(ticks * 0.0065 + self.rect.x * 0.04) * 2.2
-        sway_x = math.sin(ticks * 0.0035 + self.rect.y * 0.04) * 1.0
-
-        dy = -round(h_t * 3.0 + float_y * h_t) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
-        dx = round(sway_x * h_t) if h_t > 0 else 0
-        draw_rect = self.rect.move(dx, dy)
+        # Physical translation: gentle, stable 2px lift on hover, depress on click
+        dy = -round(h_t * 2.0) + round(p_t * 2.0) if (h_t > 0 or p_t > 0) else 0
+        draw_rect = self.rect.move(0, dy)
         radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
 
         # Luminous ambient aura glow beneath button on hover
@@ -318,10 +312,10 @@ class Button:
 
         # Soft dynamic drop shadow when lifted / enabled
         if self.enabled and self.kind != 'quiet':
-            shadow_offset = round(2.5 + h_t * 4.0 - p_t * 2.0)
-            shadow_rect = self.rect.move(dx, shadow_offset)
+            shadow_offset = round(2.0 + h_t * 2.0 - p_t * 1.5)
+            shadow_rect = self.rect.move(0, shadow_offset)
             shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
-            pygame.draw.rect(shadow_surf, (0, 0, 0, int(22 + 55 * h_t)), shadow_surf.get_rect(), border_radius=radius)
+            pygame.draw.rect(shadow_surf, (0, 0, 0, int(22 + 45 * h_t)), shadow_surf.get_rect(), border_radius=radius)
             surface.blit(shadow_surf, shadow_rect)
 
         # Smooth color transitions

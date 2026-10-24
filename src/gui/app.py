@@ -965,14 +965,14 @@ class BloxorzApp:
         pacer = FramePacer(rates[0] if rates else 60)
         last = time.perf_counter()
         try:
-            running = True
-            while running:
+            self.running = True
+            while self.running:
                 now = time.perf_counter()
                 dt = min(now - last, 0.1)  # exact elapsed time, not whole milliseconds
                 last = now
                 for event in pygame.event.get():
                     if event.type in (pygame.QUIT, pygame.WINDOWCLOSE):
-                        running = False
+                        self.running = False
                     else:
                         self.handle_event(event)
                 self.update(dt)
@@ -981,6 +981,7 @@ class BloxorzApp:
                     self.present(flip=False)
                 pacer.wait_and_flip(self.window, drew)
         finally:
+            self.running = False
             self.gateway.close()
             if hasattr(self.renderer, 'close'):
                 self.renderer.close()

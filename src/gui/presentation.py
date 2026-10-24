@@ -29,9 +29,14 @@ def scene(app):
 def sharp_board(app):
     """On a HiDPI (Retina) window the board is left out of the 1x UI frame and
     drawn at full resolution by BloxorzApp.present(), so tiles and block stay
-    sharp. Modals keep the 1x board, since they shade it."""
+    sharp. Modals and overlay panels (including the AI Solver drawer) keep the 1x
+    board since they overlap and composite directly with it."""
+    replaying = getattr(getattr(app, 'replay', None), 'status', ReplayStatus.EMPTY) != ReplayStatus.EMPTY
+    is_drawer_visible = (getattr(app, 'solver_open', False) or replaying or getattr(app, 'busy', False)
+                         or getattr(app, 'dropdown_open', False) or abs(getattr(app, 'drawer_t', 0.0)) > 0.005)
     return (getattr(app, 'hidpi', 1) > 1 and getattr(app, 'visual_style', 'dream') != 'forest_gl'
-            and not (app.menu or app.stage_picker or app.win_phase == 'choice' or getattr(app, 'in_main_menu', False)))
+            and not (app.menu or app.stage_picker or app.win_phase == 'choice' or getattr(app, 'in_main_menu', False)
+                     or is_drawer_visible))
 
 
 def draw(app):
@@ -42,7 +47,7 @@ def draw(app):
     is_split = getattr(getattr(app.session, 'current_state', None), 'orientation', None) == Orientation.SPLIT
     drawer_animating = abs(getattr(app, 'drawer_t', 0.0) - (1.0 if getattr(app, 'solver_open', False) else 0.0)) > 0.005
     menu_animating = abs(getattr(app, 'menu_t', 0.0) - (1.0 if getattr(app, 'in_main_menu', False) else 0.0)) > 0.005
-    animating_ui = (bool(hovered) or bool(hovered_metrics) or app.busy
+    animating_ui = (getattr(app, 'running', False) or bool(hovered) or bool(hovered_metrics) or app.busy
                     or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None
                     or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
                     or is_split or drawer_animating or menu_animating or getattr(app, 'in_main_menu', False))
@@ -346,11 +351,11 @@ def draw_main_menu(app):
     display = T.font('display', app.large_text)
     caption = T.font('caption', app.large_text)
 
-    # Central Frosted Glass Card - continuous gentle breathing hover
+    # Central Frosted Glass Card - calm, tranquil breathing hover (low sensitivity, zero jitter)
     ticks = getattr(app, '_ticks', pygame.time.get_ticks())
     mw = min(480, w - 40)
     mh = min(540, h - 40)
-    card_float_y = round(math.sin(ticks * 0.0022) * 4.5)
+    card_float_y = round(math.sin(ticks * 0.0011) * 1.5)
     card_rect = pygame.Rect((w - mw) // 2, (h - mh) // 2 + card_float_y, mw, mh)
     draw_glass_panel(screen, card_rect, style=style, border_radius=28, shadow=True, fill_alpha=190 if style == 'dream' else 215)
 
@@ -457,10 +462,11 @@ def _draw(app):
     # Map viewport: starts strictly at y=80 below top veil and ends before bottom toast/dock
     drawer_t = getattr(app, 'drawer_t', 1.0 if is_drawer_visible else 0.0)
     shift_x = round(-(T.PANEL_WIDTH + 24) // 2 * drawer_t)
-    app.board_rect = pygame.Rect(0, 80, w, h - 182)
+    visible_w = panel_x - 16 if is_drawer_visible else w
+    app.board_rect = pygame.Rect(0, 80, visible_w, h - 182)
     board = getattr(app, '_board_surface', None)
-    if board is None or board.get_size() != app.board_rect.size:
-        board = pygame.Surface(app.board_rect.size, pygame.SRCALPHA)
+    if board is None or board.get_size() != (w, h - 182):
+        board = pygame.Surface((w, h - 182), pygame.SRCALPHA)
         app._board_surface = board
 
     eff_pan = tuple(app.pan)
@@ -471,13 +477,13 @@ def _draw(app):
         app.renderer.draw(board, app.session.current_state, app.animation.frame,
                           intro_t=getattr(app, 'intro_t', None), outro_t=app.board_outro() if hasattr(app, 'board_outro') else None,
                           shockwave=getattr(app, 'shockwave', None), bridges=app.bridge_view() if hasattr(app, 'bridge_view') else None)
-        draw_rect = app.board_rect.move(shift_x, 0)
+        draw_x, draw_y = 0, 80
         if getattr(app, 'trauma', 0.0) > 0.01:
             intensity = app.trauma ** 1.5
-            shake_x = round(math.sin(ticks * 0.048) * 2.5 * intensity)
-            shake_y = round(math.cos(ticks * 0.062) * 1.8 * intensity)
-            draw_rect = draw_rect.move(shake_x, shake_y)
-        screen.blit(board, draw_rect)
+            draw_x += round(math.sin(ticks * 0.048) * 2.5 * intensity)
+            draw_y += round(math.cos(ticks * 0.062) * 1.8 * intensity)
+        clip_rect = pygame.Rect(max(0, -shift_x), 0, min(visible_w, w - max(0, -shift_x)), h - 182)
+        screen.blit(board, (draw_x, draw_y), clip_rect)
 
     # 1. Single Unified In-game Header Row (y = 16, height = 42)
     header_y = 16
@@ -495,8 +501,7 @@ def _draw(app):
         pygame.draw.rect(screen, (*T.ACCENT[:3], 130), draw_logo_rect, 1, border_radius=21)
 
     # Mini 3D emblem with smooth floating bobbing animation (always bobs continuously)
-    bob_ticks = pygame.time.get_ticks() if getattr(app, 'running', False) else ticks
-    mini_bob = math.sin(bob_ticks * 0.005) * 2.8
+    mini_bob = math.sin(ticks * 0.005) * 2.8
     mini_bx, mini_by = draw_logo_rect.x + 22, draw_logo_rect.centery + mini_bob
     mini_top = [(mini_bx, mini_by - 7), (mini_bx + 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx - 9, mini_by - 2)]
     mini_left = [(mini_bx - 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx, mini_by + 11), (mini_bx - 9, mini_by + 6)]
