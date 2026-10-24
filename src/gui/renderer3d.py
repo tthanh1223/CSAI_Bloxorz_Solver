@@ -469,15 +469,17 @@ class IsometricRenderer:
         cells = [(r, c) for r, row in enumerate(self.stage.grid) for c, tile in enumerate(row)
                  if tile != TileType.VOID or (r, c) in self.bridge_cells]
         cells = cells or [(0, 0)]
+        avail_w = min(size[0], size[0] - 368) if size[0] >= 900 else size[0] * 0.82
+        avail_h = size[1]
         if self.view == 'original':
             corners = [(r + dr, c + dc) for r, c in cells for dr in (0, 1) for dc in (0, 1)]
             rows = [r for r, _ in corners];cols = [c for _, c in corners]
             distance = ORIGINAL_DISTANCE * max(max(rows) - min(rows), max(cols) - min(cols), 4)
             eye = perspective_eye((min(rows) + max(rows)) / 2, (min(cols) + max(cols)) / 2, distance)
             points = [perspective_raw(eye, r, c, z) for r, c in corners
-                      for z in (-.45, 2.2)]  # tile side .. standing block
+                      for z in (-.35, 2.35)]
             xs = [p[0] for p in points];ys = [p[1] for p in points]
-            focal = min(size[0] * .88 / (max(xs) - min(xs)), size[1] * .88 / (max(ys) - min(ys)))
+            focal = min(avail_w * .86 / (max(xs) - min(xs)), avail_h * .86 / (max(ys) - min(ys)))
             cap = 112 * self.pixel_scale  # tile width 2..112 logical px at the centre
             focal = max(2 * distance, min(cap * distance, focal))
             origin = (size[0] / 2 - (min(xs) + max(xs)) * focal / 2,
@@ -486,9 +488,9 @@ class IsometricRenderer:
             self.camera = Camera3D(origin, width, width / 2, width * .24, 'original', eye + (focal,))
             return
         xs = [(c - r + delta) / 2 for r, c in cells for delta in (-1, 1)]
-        ys = [(r + c) / 4 + delta for r, c in cells for delta in (-1.38, .68)]
-        width = max(2, min(112 * self.pixel_scale, size[0] * .88 / (max(xs) - min(xs)),
-                            size[1] * .88 / (max(ys) - min(ys))))
+        ys = [(r + c) / 4 + delta for r, c in cells for delta in (-1.5, .8)]
+        width = max(2, min(112 * self.pixel_scale, avail_w * .86 / (max(xs) - min(xs)),
+                            avail_h * .86 / (max(ys) - min(ys))))
         origin = (size[0] / 2 - (min(xs) + max(xs)) * width / 2,
                   size[1] / 2 - (min(ys) + max(ys)) * width / 2)
         self.camera = Camera3D(origin, width, width / 2, width * .24, 'iso')
@@ -589,8 +591,31 @@ class IsometricRenderer:
         base = pygame.Surface(self.size, pygame.SRCALPHA)
         yield
         top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
-        # No drop shadow under the islands (removed on request); intro/outro skip it too.
-        shadow_surf = None
+        # Volumetric under-island ambient drop shadow for all 3 themes
+        shadow_colors = {
+            'dream': (120, 70, 98, 95),       # Soft dreamy lavender-mauve shadow onto clouds
+            'forest': (14, 26, 18, 130),      # Deep misty canopy shadow
+            'blueprint': (8, 22, 38, 115),    # Blueprint drafting depth shadow
+        }
+        shadow_color = shadow_colors.get(self.style, (25, 25, 35, 100))
+        raw_shadow = pygame.Surface(self.size, pygame.SRCALPHA)
+        for r, c in active_cells:
+            fp = [self.project((r + dr, c + dc, -0.58)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
+            pygame.draw.polygon(raw_shadow, shadow_color, fp)
+
+        sw, sh = self.size
+        # Pass 1: Broad diffused ambient drop shadow (offset +14px down)
+        tiny1 = pygame.transform.smoothscale(raw_shadow, (max(1, sw // 6), max(1, sh // 6)))
+        soft1 = pygame.transform.smoothscale(tiny1, (sw, sh))
+
+        # Pass 2: Closer contact drop shadow (offset +6px down)
+        tiny2 = pygame.transform.smoothscale(raw_shadow, (max(1, sw // 3), max(1, sh // 3)))
+        soft2 = pygame.transform.smoothscale(tiny2, (sw, sh))
+
+        shadow_surf = pygame.Surface(self.size, pygame.SRCALPHA)
+        shadow_surf.blit(soft1, (0, 14))
+        shadow_surf.blit(soft2, (0, 6))
+        base.blit(shadow_surf, (0, 0))
         yield
         if self.style == 'blueprint':
             # Blueprint datum floor footprint & architectural projection lines
@@ -1852,58 +1877,85 @@ class IsometricRenderer:
             pygame.draw.circle(surface, (255, 255, 255), (round(project(0, 0, dz_ridge + 0.02)[0]), round(project(0, 0, dz_ridge + 0.02)[1])), 2)
 
         elif kind == '<>':
-            # SPLIT SWITCH: Dual Faceted Quantum Chevrons & Central Faceted Diamond Core
-            base_pts = [project(-.36, -.36), project(-.36, .36), project(.36, .36), project(.36, -.36)]
-            pygame.draw.polygon(surface, (12, 22, 32), base_pts)
-            pygame.draw.aalines(surface, (36, 75, 105), True, base_pts)
+            # SPLIT SWITCH: High-Contrast Quantum Teleportation Portal with theme-adapted neon palette
+            dz_q = 0.038 if not pressed else -0.015
 
-            dz_q = 0.03 if not pressed else -0.015
-            cyan_light = (180, 255, 255) if not pressed else (120, 240, 255)
-            cyan_mid = (40, 225, 245) if not pressed else (25, 175, 205)
-            cyan_dark = (18, 140, 175) if not pressed else (12, 105, 135)
+            # Contrast-optimized palettes guaranteeing immediate visibility on light and dark themes
+            if self.style == 'dream':  # Light pastel pink tiles -> Electric Amethyst / Magenta / Radiant Gold
+                c_light = (255, 175, 235) if not pressed else (210, 130, 195)
+                c_mid = (195, 45, 175) if not pressed else (145, 25, 125)
+                c_dark = (115, 18, 105) if not pressed else (80, 10, 75)
+                c_glow = (225, 65, 205) if not pressed else (160, 35, 145)
+                c_gold = (255, 215, 60) if not pressed else (210, 175, 40)
+                well_col = (85, 22, 75, 65)
+            elif self.style == 'blueprint':  # Light blue/white drafting paper -> Deep Architectural Cobalt / Cyan
+                c_light = (110, 220, 255) if not pressed else (60, 170, 215)
+                c_mid = (20, 110, 215) if not pressed else (10, 75, 160)
+                c_dark = (8, 48, 115) if not pressed else (5, 30, 80)
+                c_glow = (25, 140, 255) if not pressed else (15, 95, 190)
+                c_gold = (0, 230, 255) if not pressed else (0, 175, 210)
+                well_col = (14, 45, 95, 75)
+            else:  # forest ruins -> Luminous Emerald / Jade / Golden Sun
+                c_light = (160, 255, 205) if not pressed else (105, 215, 155)
+                c_mid = (35, 205, 120) if not pressed else (20, 150, 85)
+                c_dark = (12, 105, 55) if not pressed else (8, 70, 35)
+                c_glow = (50, 240, 140) if not pressed else (30, 175, 95)
+                c_gold = (255, 225, 70) if not pressed else (210, 180, 45)
+                well_col = (10, 32, 20, 85)
 
-            # Central Faceted Quantum Micro-Diamond
-            d_top = project(0, 0, dz_q + 0.06)
-            d_bot = project(0, 0, dz_q - 0.03)
-            d_eq = [project(0.08 * cos(k * pi / 2), 0.08 * sin(k * pi / 2), dz_q + 0.015) for k in range(4)]
-            pygame.draw.polygon(surface, cyan_light, [d_top, d_eq[0], d_eq[1]])
-            pygame.draw.polygon(surface, cyan_mid, [d_top, d_eq[1], d_eq[2]])
-            pygame.draw.polygon(surface, cyan_dark, [d_top, d_eq[2], d_eq[3]])
-            pygame.draw.polygon(surface, cyan_mid, [d_top, d_eq[3], d_eq[0]])
-            for k in range(4):
-                pygame.draw.aaline(surface, (255, 255, 255), d_top, d_eq[k])
-                pygame.draw.aaline(surface, (255, 255, 255), d_eq[k], d_eq[(k + 1) % 4])
+            # 1. Subtle sunken etched rune well (provides dark contrast background on any tile)
+            well_pts = [project(0.38 * cos(k * pi / 6), 0.38 * sin(k * pi / 6), 0.002) for k in range(12)]
+            pygame.draw.polygon(surface, well_col, well_pts)
+            pygame.draw.aalines(surface, c_dark, True, well_pts)
 
-            # Left Faceted Quantum Chevron Prism `<`
-            c_tip_l = project(0, -.26, dz_q)
-            c_top_l = project(-.22, -.06, dz_q)
-            c_bot_l = project(.22, -.06, dz_q)
-            c_in_l = project(0, -.14, dz_q + 0.02)
+            # 2. Concentric luminous rune rings & corner anchors
+            outer_ring = [project(0.34 * cos(k * pi / 6), 0.34 * sin(k * pi / 6), 0.006) for k in range(12)]
+            pygame.draw.aalines(surface, c_glow, True, outer_ring)
+            inner_ring = [project(0.23 * cos(k * pi / 6), 0.23 * sin(k * pi / 6), 0.006) for k in range(12)]
+            pygame.draw.aalines(surface, c_gold, True, inner_ring)
+
+            for dr, dc in ((-.34, -.34), (-.34, .34), (.34, .34), (.34, -.34)):
+                p_c = project(dr, dc, 0.006)
+                pygame.draw.circle(surface, c_gold, (round(p_c[0]), round(p_c[1])), 2)
+                p_in = project(dr * 0.65, dc * 0.65, 0.006)
+                pygame.draw.aaline(surface, c_glow, p_c, p_in)
+
+            # 3. Left Faceted Quantum Chevron Prism `<`
+            c_tip_l = project(0, -.28, dz_q)
+            c_top_l = project(-.22, -.07, dz_q)
+            c_bot_l = project(.22, -.07, dz_q)
+            c_in_l = project(0, -.13, dz_q + 0.03)
 
             f_left_top = [c_top_l, c_tip_l, c_in_l]
             f_left_bot = [c_tip_l, c_bot_l, c_in_l]
-            pygame.draw.polygon(surface, cyan_light, f_left_top)
-            pygame.draw.polygon(surface, cyan_mid, f_left_bot)
+            pygame.draw.polygon(surface, c_light, f_left_top)
+            pygame.draw.polygon(surface, c_mid, f_left_bot)
             pygame.draw.aalines(surface, (255, 255, 255), True, f_left_top)
-            pygame.draw.aalines(surface, (255, 255, 255), True, f_left_bot)
+            pygame.draw.aalines(surface, c_light, True, f_left_bot)
 
-            # Right Faceted Quantum Chevron Prism `>`
-            c_tip_r = project(0, .26, dz_q)
-            c_top_r = project(-.22, .06, dz_q)
-            c_bot_r = project(.22, .06, dz_q)
-            c_in_r = project(0, .14, dz_q + 0.02)
+            # 4. Right Faceted Quantum Chevron Prism `>`
+            c_tip_r = project(0, .28, dz_q)
+            c_top_r = project(-.22, .07, dz_q)
+            c_bot_r = project(.22, .07, dz_q)
+            c_in_r = project(0, .13, dz_q + 0.03)
 
             f_right_top = [c_top_r, c_tip_r, c_in_r]
             f_right_bot = [c_tip_r, c_bot_r, c_in_r]
-            pygame.draw.polygon(surface, cyan_light, f_right_top)
-            pygame.draw.polygon(surface, cyan_mid, f_right_bot)
+            pygame.draw.polygon(surface, c_light, f_right_top)
+            pygame.draw.polygon(surface, c_mid, f_right_bot)
             pygame.draw.aalines(surface, (255, 255, 255), True, f_right_top)
-            pygame.draw.aalines(surface, (255, 255, 255), True, f_right_bot)
+            pygame.draw.aalines(surface, c_light, True, f_right_bot)
 
-            pygame.draw.aaline(surface, (200, 255, 255), project(0, -.32, dz_q), project(0, .32, dz_q))
-            for offset_c in (-.32, -.26, 0, .26, .32):
-                p_node = project(0, offset_c, dz_q)
-                pygame.draw.circle(surface, (255, 255, 255), (round(p_node[0]), round(p_node[1])), 1)
+            # 5. Twin Split Micro-Gems in the center (representing the 2 separated cubes)
+            for gem_dc, gem_col in ((-0.055, c_gold), (0.055, c_light)):
+                g_top = project(0, gem_dc, dz_q + 0.055)
+                g_eq = [project(0.045 * cos(k * pi / 2), gem_dc + 0.045 * sin(k * pi / 2), dz_q + 0.02) for k in range(4)]
+                pygame.draw.polygon(surface, (255, 255, 255), [g_top, g_eq[0], g_eq[1]])
+                pygame.draw.polygon(surface, gem_col, [g_top, g_eq[1], g_eq[2]])
+                pygame.draw.polygon(surface, c_dark, [g_top, g_eq[2], g_eq[3]])
+                pygame.draw.polygon(surface, gem_col, [g_top, g_eq[3], g_eq[0]])
+                pygame.draw.aalines(surface, (255, 255, 255), True, g_eq)
+                pygame.draw.circle(surface, (255, 255, 255), (round(g_top[0]), round(g_top[1])), 2)
 
         elif kind == '!':
             # FRAGILE TILE: Procedural Unique Multi-Branch Fracture Network with 3D Light-and-Shadow Relief

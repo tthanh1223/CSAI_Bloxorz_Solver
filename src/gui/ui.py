@@ -97,6 +97,165 @@ def draw_vector_icon(surface, name, center, color, size=16):
         r = pygame.Rect(round(cx - sz / 2), round(cy - sz / 2), sz, sz)
         pygame.draw.rect(surface, color, r, border_radius=3)
 
+    elif name in ('menu', 'home'):
+        for offset_y in (-4, 0, 4):
+            pygame.draw.line(surface, color, (cx - 5, cy + offset_y), (cx + 5, cy + offset_y), 2)
+
+    elif name in ('settings', 'gear'):
+        pygame.draw.circle(surface, color, (round(cx), round(cy)), round(hs * 0.72), 2)
+        for ang_deg in (0, 60, 120, 180, 240, 300):
+            rad = math.radians(ang_deg)
+            x1 = cx + (hs * 0.65) * math.cos(rad)
+            y1 = cy + (hs * 0.65) * math.sin(rad)
+            x2 = cx + (hs * 0.98) * math.cos(rad)
+            y2 = cy + (hs * 0.98) * math.sin(rad)
+            pygame.draw.line(surface, color, (round(x1), round(y1)), (round(x2), round(y2)), 2)
+
+    elif name == 'help':
+        pygame.draw.circle(surface, color, (round(cx), round(cy)), round(hs * 0.82), 2)
+        pygame.draw.circle(surface, color, (round(cx), round(cy + 4)), 1)
+        pygame.draw.arc(surface, color, pygame.Rect(round(cx - 3), round(cy - 5), 6, 6), 0, math.pi, 2)
+
+    elif name in ('theme', 'palette'):
+        r = hs * 0.85
+        pygame.draw.circle(surface, color, (round(cx), round(cy)), round(r), 2)
+        for dx, dy in ((-2.5, -2.5), (2.5, -2.5), (0, 2.5)):
+            pygame.draw.circle(surface, color, (round(cx + dx), round(cy + dy)), 1)
+
+    elif name in ('solve', 'ai'):
+        pts = [
+            (cx + 1, cy - hs * 0.85),
+            (cx - 4, cy + 0.5),
+            (cx - 0.5, cy + 0.5),
+            (cx - 1, cy + hs * 0.85),
+            (cx + 4, cy - 0.5),
+            (cx + 0.5, cy - 0.5),
+        ]
+        pygame.draw.polygon(surface, color, pts)
+
+    elif name == 'view':
+        cr = hs * 0.75
+        p_c = (cx, cy)
+        p_t = (cx, cy - cr)
+        p_b = (cx, cy + cr)
+        dx = cr * 0.866
+        dy = cr * 0.5
+        p_tl = (cx - dx, cy - dy)
+        p_tr = (cx + dx, cy - dy)
+        p_bl = (cx - dx, cy + dy)
+        p_br = (cx + dx, cy + dy)
+        pygame.draw.lines(surface, color, True, [p_t, p_tr, p_br, p_b, p_bl, p_tl], 1)
+        pygame.draw.line(surface, color, p_c, p_t, 1)
+        pygame.draw.line(surface, color, p_c, p_bl, 1)
+        pygame.draw.line(surface, color, p_c, p_br, 1)
+
+    elif name in ('close', 'x'):
+        s = hs * 0.65
+        pygame.draw.line(surface, color, (cx - s, cy - s), (cx + s, cy + s), 2)
+        pygame.draw.line(surface, color, (cx - s, cy + s), (cx + s, cy - s), 2)
+
+    elif name in ('load', 'folder'):
+        fw, fh = hs * 1.5, hs * 1.1
+        fx, fy = cx - fw / 2, cy - fh / 2
+        pygame.draw.rect(surface, color, pygame.Rect(round(fx), round(fy), round(fw * 0.45), 3), border_radius=1)
+        pygame.draw.rect(surface, color, pygame.Rect(round(fx), round(fy + 2), round(fw), round(fh)), 1, border_radius=2)
+
+
+_GLASS_PANEL_CACHE = {}
+
+
+def draw_glass_panel(surface, rect, style='dream', border_radius=24, shadow=True, fill_alpha=None, specular=True):
+    """Render procedural Frosted Glassmorphism card with ambient shadow, translucent tint, and specular rim."""
+    w, h = rect.size
+    if w <= 8 or h <= 8:
+        return
+    cache_key = (w, h, style, border_radius, shadow, fill_alpha, specular)
+    cached = _GLASS_PANEL_CACHE.get(cache_key)
+    if cached is None:
+        shadow_surf = None
+        if shadow:
+            pad = 14
+            shadow_surf = pygame.Surface((w + pad * 2, h + pad * 2), pygame.SRCALPHA)
+            for layer in range(pad, 0, -2):
+                alpha = int(22 * (1.0 - layer / pad) ** 1.8)
+                layer_rect = pygame.Rect(pad - layer, pad - layer + 4, w + layer * 2, h + layer * 2)
+                pygame.draw.rect(shadow_surf, (0, 0, 0, alpha), layer_rect, border_radius=border_radius + layer)
+
+        panel_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        if style == 'dream':
+            base_col = (255, 246, 250, fill_alpha if fill_alpha is not None else 145)
+            rim_bright = (255, 255, 255, 220)
+            rim_soft = (255, 255, 255, 120)
+            inner_glow = (255, 235, 245, 50)
+        elif style in ('forest', 'forest_gl'):
+            base_col = (18, 32, 25, fill_alpha if fill_alpha is not None else 165)
+            rim_bright = (210, 248, 228, 195)
+            rim_soft = (110, 160, 130, 120)
+            inner_glow = (130, 185, 150, 40)
+        else:  # blueprint
+            base_col = (14, 32, 52, fill_alpha if fill_alpha is not None else 180)
+            rim_bright = (175, 235, 255, 215)
+            rim_soft = (55, 130, 185, 130)
+            inner_glow = (75, 175, 225, 40)
+
+        pygame.draw.rect(panel_surf, base_col, panel_surf.get_rect(), border_radius=border_radius)
+        if inner_glow[3] > 0:
+            pygame.draw.rect(panel_surf, inner_glow, panel_surf.get_rect().inflate(-2, -2), 1, border_radius=max(1, border_radius - 1))
+
+        pygame.draw.rect(panel_surf, rim_soft, panel_surf.get_rect(), 1, border_radius=border_radius)
+        if specular and w > border_radius * 2:
+            spec_top = pygame.Surface((w, 2), pygame.SRCALPHA)
+            pygame.draw.line(spec_top, rim_bright, (border_radius, 0), (w - border_radius, 0), 1)
+            panel_surf.blit(spec_top, (0, 0))
+            if h > border_radius * 2:
+                spec_left = pygame.Surface((2, h), pygame.SRCALPHA)
+                pygame.draw.line(spec_left, rim_bright, (0, border_radius), (0, h - border_radius), 1)
+                panel_surf.blit(spec_left, (0, 0))
+
+        if len(_GLASS_PANEL_CACHE) > 32:
+            _GLASS_PANEL_CACHE.clear()
+        cached = (shadow_surf, panel_surf)
+        _GLASS_PANEL_CACHE[cache_key] = cached
+
+    shadow_surf, panel_surf = cached
+    if shadow_surf is not None:
+        surface.blit(shadow_surf, (rect.x - 14, rect.y - 14))
+    surface.blit(panel_surf, rect.topleft)
+
+
+def draw_bento_card(surface, rect, label, value, unit="", style='dream', font_lbl=None, font_val=None, font_unit=None):
+    """Render a 2x2 Bento Metric Card with solid frosted glass styling, hover glow, and centered typography."""
+    mouse_pos = pygame.mouse.get_pos()
+    is_hover = rect.collidepoint(mouse_pos)
+    draw_r = rect
+    if is_hover:
+        ticks = pygame.time.get_ticks()
+        sway_x = round(math.sin(ticks * 0.008 + rect.x) * 1.5)
+        lift_y = -3 + round(math.cos(ticks * 0.008 + rect.y) * 1.0)
+        draw_r = rect.move(sway_x, lift_y)
+
+    alpha = 185 if style == 'dream' else 215
+    draw_glass_panel(surface, draw_r, style=style, border_radius=14, shadow=False, fill_alpha=alpha, specular=True)
+    border_col = theme.ACCENT if is_hover else ((255, 255, 255, 80) if style == 'dream' else (*theme.LINE[:3], 90))
+    pygame.draw.rect(surface, border_col, draw_r, 1, border_radius=14)
+    if is_hover:
+        glow = pygame.Surface((draw_r.width + 8, draw_r.height + 8), pygame.SRCALPHA)
+        pygame.draw.rect(glow, (*theme.ACCENT[:3], 35), glow.get_rect(), border_radius=18)
+        surface.blit(glow, (draw_r.x - 4, draw_r.y - 4))
+
+    lbl_color = theme.ACCENT if is_hover else theme.MUTED
+    if font_lbl:
+        text(surface, font_lbl, label.upper(), (draw_r.x + 12, draw_r.y + 7), lbl_color)
+
+    val_color = theme.TEXT
+    if font_val:
+        v_surf = font_val.render(str(value), True, val_color)
+        u_surf = font_unit.render(f" {unit}", True, theme.MUTED) if (unit and font_unit) else None
+        val_y = draw_r.y + 24
+        surface.blit(v_surf, (draw_r.x + 12, val_y))
+        if u_surf:
+            surface.blit(u_surf, (draw_r.x + 12 + v_surf.get_width(), val_y + max(0, v_surf.get_height() - u_surf.get_height() - 2)))
+
 
 _BUTTON_ANIM: dict[str, dict[str, float]] = {}
 
@@ -122,9 +281,9 @@ class Button:
         pressed = hover and pygame.mouse.get_pressed()[0]
 
         # Smooth interactive animation tracking (60fps ease)
-        btn_id = f"{self.key}_{self.rect.x}_{self.rect.y}"
+        btn_id = f"{self.key}_{self.kind}"
         anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0, 'ripple': 0.0})
-        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.40
+        anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.35
         anim['press'] += ((1.0 if pressed else 0.0) - anim['press']) * 0.50
         if pressed:
             anim['ripple'] = min(1.0, anim.get('ripple', 0.0) + 0.16)
@@ -139,10 +298,10 @@ class Button:
         rip_t = anim['ripple']
 
         # Physical translation: lift up smoothly on hover, depress down on click
-        # Breakthrough dynamic floating & swaying micro-animation on hover
+        # Dynamic floating & swaying micro-animation on hover
         ticks = pygame.time.get_ticks()
         float_y = math.sin(ticks * 0.0065 + self.rect.x * 0.04) * 2.2
-        sway_x = math.sin(ticks * 0.0035 + self.rect.y * 0.04) * 1.0
+        sway_x = math.sin(ticks * 0.0035 + self.rect.y * 0.04) * 1.2
 
         dy = -round(h_t * 3.0 + float_y * h_t) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
         dx = round(sway_x * h_t) if h_t > 0 else 0
@@ -263,23 +422,70 @@ class Button:
             pygame.draw.rect(surface, theme.ACCENT, draw_rect, 1, border_radius=12)
 
         # Draw icon and label
-        has_vector_icon = self.icon or self.key in ('undo', 'restart', 'hint', 'play', 'step', 'back', 'stop')
+        has_vector_icon = bool(self.icon) or self.key in ('undo', 'restart', 'hint', 'play', 'step', 'back', 'stop',
+                                                          'menu', 'settings', 'help', 'theme', 'solve', 'view', 'close', 'load')
         icon_name = self.icon or ('pause' if self.label == 'Pause' else self.key)
 
-        if has_vector_icon and (self.kind in ('dock_item', 'icon') or (self.kind == 'pill' and self.key in ('undo', 'restart', 'hint'))):
-            # Draw icon on the left, label on the right
+        if self.kind == 'close_btn' or self.key in ('close_menu', 'close', 'close_solver'):
+            cx, cy = draw_rect.center
+            r = min(draw_rect.width, draw_rect.height) // 2
+            if h_t > 0.05:
+                aura = pygame.Surface((r * 2 + 16, r * 2 + 16), pygame.SRCALPHA)
+                pygame.draw.circle(aura, (255, 85, 105, int(75 * h_t)), (r + 8, r + 8), r + 6)
+                surface.blit(aura, (cx - r - 8, cy - r - 8))
+            bg_circle = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            circle_col = (255, 95, 115, int(70 + 130 * h_t)) if h_t > 0 else (255, 255, 255, 50)
+            pygame.draw.circle(bg_circle, circle_col, (r, r), r)
+            rim_col = (255, 255, 255, 220) if h_t == 0 else (255, 180, 195, 240)
+            pygame.draw.circle(bg_circle, rim_col, (r, r), r, 1)
+            surface.blit(bg_circle, (cx - r, cy - r))
+            x_col = (255, 255, 255) if h_t > 0 else foreground
+            draw_vector_icon(surface, 'close', (cx, cy), x_col, size=15)
+        elif has_vector_icon and not self.label:
+            # Centered icon only
+            draw_vector_icon(surface, icon_name, draw_rect.center, foreground, size=15)
+        elif has_vector_icon and (self.kind in ('dock_item', 'icon', 'pill', 'primary', 'secondary') or self.key in ('undo', 'restart', 'hint', 'solve', 'view', 'menu', 'theme', 'settings', 'help', 'continue_game')):
+            # Centered (icon + gap + label + chevron) group
             is_dock = self.kind == 'dock_item'
-            icon_cx = draw_rect.x + (16 if is_dock else 22)
-            icon_cy = draw_rect.centery
-            draw_vector_icon(surface, icon_name, (icon_cx, icon_cy), foreground, size=13 if is_dock else 15)
+            icon_size = 13 if is_dock else 14
+            gap = 7
             lbl = font.render(self.label, True, foreground)
-            lbl_rect = lbl.get_rect(midleft=(icon_cx + (9 if is_dock else 12), draw_rect.centery))
-            surface.blit(lbl, lbl_rect)
-        else:
-            # Centered label
-            lbl = font.render(self.label, True, foreground)
-            surface.blit(lbl, lbl.get_rect(center=draw_rect.center))
+            lbl_w, lbl_h = lbl.get_size()
 
-        if self.key in ('choose', 'algorithm_menu'):
-            x, y = draw_rect.right - 16, draw_rect.centery
-            pygame.draw.lines(surface, foreground, False, [(x - 4, y - 2), (x, y + 2), (x + 4, y - 2)], 1)
+            has_chevron = self.key in ('choose', 'algorithm_menu')
+            chev_space = (gap + 8) if has_chevron else 0
+
+            avail_w = draw_rect.width - 16
+            if icon_size + gap + lbl_w + chev_space > avail_w:
+                lbl_max_w = max(10, avail_w - icon_size - gap - chev_space)
+                lbl_text = self.label
+                while lbl_text and font.size(lbl_text + '…')[0] > lbl_max_w:
+                    lbl_text = lbl_text[:-1]
+                lbl = font.render(lbl_text + ('…' if lbl_text != self.label else ''), True, foreground)
+                lbl_w = lbl.get_width()
+
+            total_content_w = icon_size + gap + lbl_w + chev_space
+            start_x = round(draw_rect.centerx - total_content_w / 2)
+            icon_cx = start_x + icon_size // 2
+            draw_vector_icon(surface, icon_name, (icon_cx, draw_rect.centery), foreground, size=icon_size)
+            lbl_rect = lbl.get_rect(midleft=(start_x + icon_size + gap, draw_rect.centery))
+            surface.blit(lbl, lbl_rect)
+            if has_chevron:
+                ch_x = lbl_rect.right + gap + 4
+                ch_y = draw_rect.centery
+                pygame.draw.lines(surface, foreground, False, [(ch_x - 4, ch_y - 2), (ch_x, ch_y + 2), (ch_x + 4, ch_y - 2)], 1)
+        else:
+            # Centered label (with optional chevron)
+            has_chevron = self.key in ('choose', 'algorithm_menu')
+            lbl = font.render(self.label, True, foreground)
+            if has_chevron:
+                gap = 6
+                total_w = lbl.get_width() + gap + 8
+                start_x = round(draw_rect.centerx - total_w / 2)
+                lbl_rect = lbl.get_rect(midleft=(start_x, draw_rect.centery))
+                surface.blit(lbl, lbl_rect)
+                ch_x = lbl_rect.right + gap + 4
+                ch_y = draw_rect.centery
+                pygame.draw.lines(surface, foreground, False, [(ch_x - 4, ch_y - 2), (ch_x, ch_y + 2), (ch_x + 4, ch_y - 2)], 1)
+            else:
+                surface.blit(lbl, lbl.get_rect(center=draw_rect.center))

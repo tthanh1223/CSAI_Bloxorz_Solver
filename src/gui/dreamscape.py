@@ -13,10 +13,9 @@ def background(size, style='dream', cells=(), stage_index=0):
     if style == 'blueprint':
         return blueprint(size, cells, stage_index)
     if style == 'forest':
-        asset = ASSET_DIR / 'forest_ruins_background.png'
-    else:
-        new_asset = ASSET_DIR / 'wide_dreamy_fantasy_landscape_scene_pastel_pink.png'
-        asset = new_asset if new_asset.exists() else ASSET_DIR / 'dream_city_background.png'
+        return forest_ruins(size, cells, stage_index)
+    new_asset = ASSET_DIR / 'wide_dreamy_fantasy_landscape_scene_pastel_pink.png'
+    asset = new_asset if new_asset.exists() else ASSET_DIR / 'dream_city_background.png'
     if asset.exists():
         image = pygame.image.load(str(asset))
         scale = max(size[0] / image.get_width(), size[1] / image.get_height())
@@ -31,8 +30,54 @@ def background(size, style='dream', cells=(), stage_index=0):
     return result
 
 
+def forest_ruins(size, cells, stage_index):
+    """Ancient overgrown stone ruin backdrop with canopy god rays and relic floor plan tablet."""
+    w, h = size
+    result = pygame.Surface(size)
+    asset = ASSET_DIR / 'forest_ruins_background.png'
+    if asset.exists():
+        image = pygame.image.load(str(asset))
+        scale = max(w / image.get_width(), h / image.get_height())
+        image = pygame.transform.smoothscale(image, (round(image.get_width() * scale), round(image.get_height() * scale)))
+        result.blit(image, ((w - image.get_width()) // 2, (h - image.get_height()) // 2))
+    else:
+        # Deep emerald ancient ruin gradient
+        for y in range(h):
+            t = y / max(1, h - 1)
+            col = (round(12 + 10 * t), round(26 + 18 * t), round(20 + 14 * t))
+            pygame.draw.line(result, col, (0, y), (w, y))
+
+    # Volumetric atmospheric sunbeams / god rays through canopy
+    rays = pygame.Surface(size, pygame.SRCALPHA)
+    for i, (rx, rw, ang) in enumerate(((w * 0.18, 90, 0.45), (w * 0.46, 120, 0.38), (w * 0.74, 85, 0.42))):
+        pts = [
+            (rx, 0),
+            (rx + rw, 0),
+            (rx + rw + h * ang, h),
+            (rx + h * ang, h)
+        ]
+        alpha = 18 + (i % 2) * 8
+        pygame.draw.polygon(rays, (255, 245, 200, alpha), pts)
+    result.blit(rays, (0, 0))
+
+    # Glowing mystical forest fireflies / pollen motes
+    motes = pygame.Surface(size, pygame.SRCALPHA)
+    rng = random.Random(1337 + stage_index)
+    for _ in range(48):
+        mx = rng.randint(20, w - 20)
+        my = rng.randint(40, h - 40)
+        mr = rng.choice((1, 2, 2, 3))
+        ma = rng.randint(80, 210)
+        col = (255, rng.randint(215, 245), rng.randint(120, 180), ma)
+        pygame.draw.circle(motes, col, (mx, my), mr)
+        if mr > 1:
+            pygame.draw.circle(motes, (255, 255, 200, ma // 3), (mx, my), mr + 2)
+    result.blit(motes, (0, 0))
+    return result
+
+
 def blueprint(size, cells, stage_index):
-    """Paper grain, real isometric drafting grid, compass cube badge, and floor plan."""
+    """Paper grain, real isometric drafting grid, compass cube badge, and floor plan covering full screen."""
     w, h = size
     grain = pygame.Surface((256, 256))
     rng = random.Random(72)
@@ -47,7 +92,7 @@ def blueprint(size, cells, stage_index):
             result.blit(grain, (x, y))
 
     guides = pygame.Surface(size, pygame.SRCALPHA)
-    boundary = w - 300
+    boundary = w - 48
     guides.set_clip((0, 70, boundary, h - 80))
 
     # Real technical isometric drafting lines (30-degree angles)
