@@ -10,7 +10,8 @@ from src.engine.problem import BloxorzProblem, GameSession
 from src.engine.state import Action, GameState, Orientation
 from src.gui.app import BloxorzApp, initial_state
 from src.gui.contracts import MotionFrame, ReplayStatus, SolverRequest, SolverStatus, SolverResponse, SolverResultView
-from src.gui.renderer3d import state_meshes, motion_meshes, IsometricRenderer
+from src.gui.renderer3d import state_meshes, motion_meshes, IsometricRenderer, cuboid, cuboid_samples, in_front, fall_meshes
+from src.gui.renderer3d import INTRO_DROP_START, INTRO_IMPACTS, INTRO_SECONDS, intro_drop
 from src.gui.animation import RollAnimation
 from src.gui.replay import PathReplay
 from src.gui.solver_gateway import ProcessSolverGateway
@@ -467,6 +468,94 @@ def test_fall_frames_render_and_view_toggle(tmp_path):
     pygame.quit()
 
 
+def reachable_falls(stage, limit=60):
+    """(before, illegal pose, action) of falls from the first `limit` states."""
+    problem = BloxorzProblem(stage, initial_state(stage))
+    seen = [initial_state(stage)]
+    for state in seen:
+        if len(seen) >= limit:
+            break
+        legal = {action: after for action, after, _ in problem.get_successors(state)}
+        seen.extend(after for after in legal.values() if after not in seen)
+        for action in (Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT):
+            fallen = BloxorzProblem.roll_block(state, action)
+            if action not in legal and fallen is not None:
+                yield state, fallen, action
+
+
+def test_falling_block_never_goes_into_a_tile():
+    """Off an edge, down a hole or through a broken fragile tile: the block
+    tips over the edge and tumbles away, and no part of it enters a tile."""
+    import collections
+    paths = sorted((ROOT / 'levels').glob('stage_*.json'))
+    renderer = IsometricRenderer()
+    plans = collections.Counter()
+    for index in (0, 3, 32):  # plain edges, fragile tiles, a hole in the board
+        renderer.set_stage(load_stage(str(paths[index])))
+        for view in ('original', 'iso'):
+            renderer.set_view(view)
+            for before, fallen, action in reachable_falls(renderer.stage):
+                motion = MotionFrame(before, fallen, action, .5, True)
+                tip = renderer._tip(fallen, action)
+                plan = renderer._fall_plan(motion, tip)
+                plans[plan] += 1
+                assert tip is None or not renderer._fall_hits_tiles(motion, tip, plan), (index, before, action)
+    assert plans['tumble'] > plans['straight'] > 0
+
+
+def test_tiles_in_front_of_the_block_hide_it():
+    pygame.init()
+    app = app_fixture()
+    renderer = app.renderer
+    tile = cuboid(2.03, 2.03, -.55, .94, .94, .55)
+    for view in ('original', 'iso'):
+        renderer.set_view(view)
+        camera = renderer.camera
+        assert in_front(cuboid(2, 2, 0, 1, 1, 2), tile, camera)        # standing on it
+        assert not in_front(cuboid(2, 2, -3, 1, 1, 1), tile, camera)   # below it
+        assert in_front(cuboid(3, 2, -1, 1, 1, 1), tile, camera)       # past its near side
+        assert not in_front(cuboid(1, 2, -1, 1, 1, 1), tile, camera)   # past its far side
+    renderer.set_view('original')
+    surface = pygame.Surface((830, 630), pygame.SRCALPHA)
+    mask = app.session.current_state.bridges_status
+
+    def fall_frame(start, action, progress):
+        before = GameState(start, start, Orientation.STANDING, 0, mask)
+        motion = MotionFrame(before, BloxorzProblem.roll_block(before, action), action, progress, True)
+        surface.fill((0, 0, 0, 0))
+        renderer.draw(surface, before, motion)
+        return motion
+
+    # Off the far edge: the board hides the block, not even a tint shows through.
+    fall_frame((1, 1), Action.UP, .8)
+    base = renderer._base
+    for x in range(0, 830, 3):
+        for y in range(0, 630, 3):
+            if base.get_at((x, y)).a == 255:
+                assert surface.get_at((x, y)) == base.get_at((x, y)), (x, y)
+    # Off the near edge (toward the viewer): the block is in front of the tiles
+    # it fell from (row 4), also where it is below the board top.
+    def opaque(sprites, x, y, alpha=255):
+        return any(spr.get_rect(topleft=xy).collidepoint(x, y) and spr.get_at((x - xy[0], y - xy[1])).a >= alpha
+                   for spr, xy in sprites)
+    edge = [(spr, xy) for _, spr, xy, cell, *_ in renderer._tile_sprites if cell[0] == 4]
+    others = [(spr, xy) for _, spr, xy, cell, *_ in renderer._tile_sprites if cell[0] != 4]
+    checked = 0
+    for progress in [i / 40 for i in range(12, 40)]:
+        motion = fall_frame((3, 9), Action.DOWN, progress)
+        tip = renderer._tip(motion.after, motion.action)
+        corners = fall_meshes(motion, tip, renderer._fall_plan(motion, tip))[0][0]
+        centre = [sum(p[i] for p in corners) / 8 for i in range(3)]
+        inner = [tuple(m + (v - m) * .8 for v, m in zip(p, centre)) for p in corners]  # off the outline
+        for point in cuboid_samples(inner, 8):
+            x, y = (round(v) for v in renderer.project(point))
+            if point[2] < 0 and opaque(edge, x, y) and not opaque(others, x, y, alpha=1):
+                assert surface.get_at((x, y)) != renderer._base.get_at((x, y)), (progress, point)
+                checked += 1
+    assert checked > 10
+    pygame.quit()
+
+
 def win_manually(app):
     path = solution(app)
     for action in path:
@@ -530,7 +619,7 @@ def test_replay_win_does_not_change_stage():
 def test_sound_events_follow_gameplay():
     class Recorder:
         def __init__(self): self.log = []
-        def play(self, name='roll'): self.log.append(name)
+        def play(self, name='roll', volume=1.0): self.log.append(name)
     app = app_fixture()
     app.sound, app.sound_enabled, app.animate = Recorder(), True, False
     assert app.apply_action(Action.UP) is False          # stage 01: falls off the top edge
@@ -539,6 +628,38 @@ def test_sound_events_follow_gameplay():
     for action in solution(app):
         app.apply_action(action)
     assert app.sound.log[-1] == 'win' and app.sound.log.count('roll') >= 1
+
+
+def test_stage_intro_block_drops_and_bounces():
+    """The block falls under gravity, bounces lower each time and comes to
+    rest; each bounce thuds more softly, and every intro frame draws."""
+    assert intro_drop(INTRO_DROP_START - .01) is None  # not released yet
+    steps = [i / 480 for i in range(round(INTRO_DROP_START * 480), round(INTRO_SECONDS * 480) + 1)]
+    heights = [intro_drop(t)[0] for t in steps]
+    assert heights[0] > 5 and heights[-1] == 0.0 and intro_drop(INTRO_SECONDS) == (0.0, 0.0)
+    peaks = [b for a, b, c in zip(heights, heights[1:], heights[2:]) if a < b >= c and b > .01]
+    assert len(peaks) >= 2 and .5 < peaks[0] < 1.5 and peaks == sorted(peaks, reverse=True)
+    first_hit = INTRO_IMPACTS[0][0]
+    assert intro_drop(first_hit + .03)[1] > .05  # squashed for a moment on impact
+    assert all(height == 0.0 for height in heights[-10:])  # at rest before the intro ends
+
+    class Recorder:
+        def __init__(self): self.log = []
+        def play(self, name='roll', volume=1.0): self.log.append((name, volume))
+    pygame.init()
+    app = app_fixture()
+    app.screen = pygame.Surface((1180, 742))
+    app.sound, app.sound_enabled, app.animate = Recorder(), True, True
+    app.restart()
+    for _ in range(200):
+        app.update(1 / 60)
+        app.draw()
+        if app.intro_t is None:
+            break
+    assert app.intro_t is None
+    thuds = [volume for name, volume in app.sound.log if name == 'roll']
+    assert len(thuds) == len(INTRO_IMPACTS) and thuds[0] == 1.0 and thuds == sorted(thuds, reverse=True)
+    pygame.quit()
 
 
 def test_fragile_tile_breaks_when_block_stands_on_it():
@@ -678,3 +799,53 @@ def test_frame_pacer_targets_even_60_fps():
     pacer.wait_and_flip(window, drew=True)
     pacer.wait_and_flip(window, drew=False)  # nothing new: wait, but do not flip
     assert window.flips == 1
+
+
+def test_switch_boards_are_ready_before_the_press():
+    """Pressing a switch must not compose a board on the spot (that was a hitch):
+    boards for bridge layouts a move or two away are composed while idle."""
+    import collections
+    from src.gui.renderer3d import _Bridges
+    pygame.init()
+    app = app_fixture()
+    app.screen = pygame.Surface((1180, 742))
+    app.select_stage(4)  # stage 05: its first switch closes an open bridge
+    problem, start = app.session.problem, app.session.current_state
+    previous, queue, goal = {start: None}, collections.deque([start]), None
+    while queue and goal is None:
+        state = queue.popleft()
+        for action, nxt, _ in problem.get_successors(state):
+            if nxt in previous:
+                continue
+            previous[nxt] = (state, action)
+            if nxt.bridges_status != state.bridges_status:
+                goal = nxt
+                break
+            queue.append(nxt)
+    path, node = [], goal
+    while previous[node]:
+        node, action = previous[node]
+        path.append(action)
+    path.reverse()
+    for action in path[:-1]:
+        assert app.apply_action(action)
+        while app.animation.busy:
+            app.update(1 / 60)
+            app.draw()
+    for _ in range(60):  # a second of standing next to the switch
+        app.update(1 / 60)
+        app.draw()
+    before = app.session.current_state.bridges_status
+    during = tuple(a and b for a, b in zip(before, goal.bridges_status))
+    renderer = app.renderer
+    for status in (during, goal.bridges_status):
+        key = renderer._base_key(renderer._active_cells(_Bridges(status)))
+        assert key in renderer._base_cache, status
+    composed = []
+    original = renderer._compose_board
+    renderer._compose_board = lambda *args: (composed.append(args), original(*args))[1]
+    assert app.apply_action(path[-1])
+    app.update(1 / 60)
+    app.draw()  # the frame the switch is pressed
+    assert not composed
+    pygame.quit()

@@ -47,7 +47,7 @@ def draw(app):
     is_split = getattr(getattr(app.session, 'current_state', None), 'orientation', None) == Orientation.SPLIT
     drawer_animating = abs(getattr(app, 'drawer_t', 0.0) - (1.0 if getattr(app, 'solver_open', False) else 0.0)) > 0.005
     menu_animating = abs(getattr(app, 'menu_t', 0.0) - (1.0 if getattr(app, 'in_main_menu', False) else 0.0)) > 0.005
-    animating_ui = (getattr(app, 'running', False) or bool(hovered) or bool(hovered_metrics) or app.busy
+    animating_ui = ((getattr(app, 'running', False) and not sharp_board(app)) or bool(hovered) or bool(hovered_metrics) or app.busy
                     or bool(app.win_phase) or getattr(app, 'active_slider', None) is not None
                     or getattr(app, 'trauma', 0.0) > 0.01 or getattr(app, 'shockwave', None) is not None
                     or is_split or drawer_animating or menu_animating or getattr(app, 'in_main_menu', False))
@@ -395,8 +395,24 @@ def draw_main_menu(app):
     screen.blit(hint, hint.get_rect(center=(w // 2, h - 20)))
 
 
+def draw_header_emblem(surface, bx, by, style, scale=1):
+    """The small 3D cube next to BLOXORZ; (bx, by) is its centre in logical pixels."""
+    def at(dx, dy):
+        return ((bx + dx) * scale, (by + dy) * scale)
+    top = [at(0, -7), at(9, -2), at(0, 2), at(-9, -2)]
+    left = [at(-9, -2), at(0, 2), at(0, 11), at(-9, 6)]
+    right = [at(0, 2), at(9, -2), at(9, 6), at(0, 11)]
+    pygame.draw.polygon(surface, lerp_color(T.ACCENT, (22, 32, 48) if style != 'dream' else (185, 122, 155), 0.35), left)
+    pygame.draw.polygon(surface, lerp_color(T.ACCENT, (8, 12, 22) if style != 'dream' else (135, 72, 105), 0.65), right)
+    pygame.draw.polygon(surface, lerp_color(T.ACCENT, (255, 255, 255), 0.58), top)
+    pygame.draw.lines(surface, (255, 255, 255, 200), True, top, max(1, round(scale)))
+    # Sparkling glint on mini cube apex
+    pygame.draw.circle(surface, (255, 255, 255), (round(bx * scale), round((by - 7) * scale)), max(1, round(scale)))
+
+
 def _draw(app):
     screen = app.screen
+    app._emblem = None  # set below when present() should draw the header emblem
     w, h = screen.get_size()
     mouse = pygame.mouse.get_pos()
     ticks = getattr(app, '_ticks', 0)
@@ -498,19 +514,14 @@ def _draw(app):
     if logo_hover:
         pygame.draw.rect(screen, (*T.ACCENT[:3], 130), draw_logo_rect, 1, border_radius=21)
 
-    # Mini 3D emblem with smooth floating bobbing animation (always bobs continuously)
-    mini_bob = math.sin(ticks * 0.005) * 2.8
-    mini_bx, mini_by = draw_logo_rect.x + 22, draw_logo_rect.centery + mini_bob
-    mini_top = [(mini_bx, mini_by - 7), (mini_bx + 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx - 9, mini_by - 2)]
-    mini_left = [(mini_bx - 9, mini_by - 2), (mini_bx, mini_by + 2), (mini_bx, mini_by + 11), (mini_bx - 9, mini_by + 6)]
-    mini_right = [(mini_bx, mini_by + 2), (mini_bx + 9, mini_by - 2), (mini_bx + 9, mini_by + 6), (mini_bx, mini_by + 11)]
-    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (22, 32, 48) if style != 'dream' else (185, 122, 155), 0.35), mini_left)
-    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (8, 12, 22) if style != 'dream' else (135, 72, 105), 0.65), mini_right)
-    pygame.draw.polygon(screen, lerp_color(T.ACCENT, (255, 255, 255), 0.58), mini_top)
-    pygame.draw.lines(screen, (255, 255, 255, 200), True, mini_top, 1)
-
-    # Sparkling glint on mini cube apex
-    pygame.draw.circle(screen, (255, 255, 255), (round(mini_bx), round(mini_by - 7)), 1)
+    # Mini 3D emblem with smooth floating bobbing animation (always bobs continuously).
+    # On a Retina window present() draws it every frame at full resolution, so
+    # the cached UI does not have to be rebuilt every frame just for the bob.
+    mini_bx = draw_logo_rect.x + 22
+    if sharp_board(app):
+        app._emblem = (mini_bx, draw_logo_rect.centery, style)
+    else:
+        draw_header_emblem(screen, mini_bx, draw_logo_rect.centery + math.sin(ticks * 0.005) * 2.8, style)
     logo_title = heading.render("BLOXORZ", True, T.TEXT)
     screen.blit(logo_title, (draw_logo_rect.x + 38, draw_logo_rect.y + (header_h - logo_title.get_height()) // 2))
 

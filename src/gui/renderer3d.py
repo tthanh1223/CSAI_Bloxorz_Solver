@@ -128,6 +128,14 @@ class Camera3D:
         return (self.origin[0] + (col - row) * self.tile_width / 2,
                 self.origin[1] + (col + row) * self.tile_depth / 2 - height)
 
+    def sees(self, normal: Point, offset: float) -> bool:
+        """True if the camera is on the side of the plane normal . p = offset
+        that the normal points to (p = (row, col, z))."""
+        if self.view == 'original':
+            eye = (self.eye[1], self.eye[0], self.eye[2] / ORIGINAL_HEIGHT)
+            return sum(n * e for n, e in zip(normal, eye)) > offset
+        return normal[0] + normal[1] + normal[2] * (5 / 6) > 0  # toward the viewer, see depth()
+
     def depth(self, row: float, col: float, z: float) -> float:
         """Painter's-algorithm key: larger = closer to the viewer, drawn later.
 
@@ -138,6 +146,27 @@ class Camera3D:
         if self.view == 'original':
             return -perspective_raw(self.eye, row, col, z)[2]
         return row + col + z * (5 / 6)
+
+
+def in_front(solid: list[Point], other: list[Point], camera: Camera3D) -> bool:
+    """Painter's order of two convex solids that do not overlap, each given by
+    its 8 cuboid corners: True if `solid` is in front of `other` as `camera`
+    sees them. A face plane of one with the other entirely outside it
+    separates them; whichever of the two is on the camera's side is in front.
+    Without such a plane, the nearer centre wins."""
+    for inside, outside, outside_is_solid in ((other, solid, True), (solid, other, False)):
+        centre = [sum(p[i] for p in inside) / 8 for i in range(3)]
+        for face in FACES:
+            a, b, c = (inside[i] for i in face[:3])
+            u, v = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
+            normal = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+            offset = sum(n * x for n, x in zip(normal, a))
+            if sum(n * x for n, x in zip(normal, centre)) > offset:  # make it point outward
+                normal, offset = tuple(-n for n in normal), -offset
+            if all(sum(n * x for n, x in zip(normal, p)) >= offset - 1e-6 for p in outside):
+                return camera.sees(normal, offset) == outside_is_solid
+    middle = [[sum(p[i] for p in points) / len(points) for i in range(3)] for points in (solid, other)]
+    return camera.depth(*middle[0]) > camera.depth(*middle[1])
 
 
 def cuboid(r, c, z, rows, cols, height) -> list[Point]:
@@ -310,12 +339,57 @@ def tip_mesh(vertices: list[Point], tip: Tip, fraction: float) -> list[Point]:
     return result
 
 
-def fall_meshes(motion: MotionFrame, tip: Tip | None) -> list[tuple[list[Point], bool, bool]]:
+FALL_TIP_ANGLE = pi / 4  # the block pivots on the board edge up to this angle...
+FALL_TIP_TIME = .36      # ...taking this share of the drop phase (it starts slowly)
+
+
+def _tip_free(vertices: list[Point], tip: Tip, t: float, centre: Point) -> list[Point]:
+    """Tip over the board edge like a rigid body, t in 0..1.
+
+    First the block pivots on the edge (tip_mesh, angle ~ t^2). The pivot
+    stays on the edge, so the part over the board only rises: nothing goes
+    into the tiles. At FALL_TIP_ANGLE it lets go: its centre keeps the speed
+    it had and falls with gravity, and the block keeps spinning at the same
+    rate, so it moves away from the board while it drops.
+    centre: the moving block's centre before tipping.
+    """
+    axis, direction, pivot = tip
+    spin = 2 * FALL_TIP_ANGLE / FALL_TIP_TIME  # angular speed when it lets go
+    if t <= FALL_TIP_TIME:
+        return tip_mesh(vertices, tip, (t / FALL_TIP_TIME) ** 2 * FALL_TIP_ANGLE / (pi / 2))
+    free = t - FALL_TIP_TIME
+    released = tip_mesh(vertices + [centre], tip, FALL_TIP_ANGLE / (pi / 2))
+    centre = released.pop()
+    # (u, z): distance past the edge (toward the empty side) and height.
+    u0, z0 = (centre[axis] - pivot) * direction, centre[2]
+    gravity = 2 * FALL_DISTANCE / (1 - FALL_TIP_TIME) ** 2
+    u1 = u0 + spin * z0 * free  # d(u, z)/d(angle) = (z, -u) for tip_mesh's rotation
+    z1 = z0 - spin * u0 * free - gravity * free * free / 2
+    angle = spin * free
+    result = []
+    for point in released:
+        u, z = (point[axis] - pivot) * direction - u0, point[2] - z0
+        v = list(point)
+        v[axis] = pivot + (u1 + u * cos(angle) + z * sin(angle)) * direction
+        v[2] = z1 - u * sin(angle) + z * cos(angle)
+        result.append(tuple(v))
+    return result
+
+
+# How the block can leave the board, most natural first. The renderer uses the
+# first one that keeps it out of every tile (IsometricRenderer._fall_plan):
+# a block over a hole as big as itself drops straight through it.
+FALL_PLANS = ('tumble', 'straight')
+
+
+def fall_meshes(motion: MotionFrame, tip: Tip | None,
+                plan: str = 'tumble') -> list[tuple[list[Point], bool, bool]]:
     """Geometry of a falling block. Returns (vertices, active, moving) per mesh.
 
     Phase 1 (progress < FALL_ROLL_END): the usual roll into the illegal pose.
-    Phase 2: the block drops with gravity (distance ~ t^2) and, if part of it
-    hangs over empty space, topples over the board edge (tip). tip=None means
+    Phase 2: if part of the block hangs over empty space, it tips over the
+    board edge and falls away from the board ('tumble', _tip_free), or drops
+    straight down through a hole as big as itself ('straight'). tip=None means
     every cell has a tile under it (a fragile tile broke): drop straight down.
     In split mode only the active cube moves; the other cube stays put.
     """
@@ -326,32 +400,40 @@ def fall_meshes(motion: MotionFrame, tip: Tip | None) -> list[tuple[list[Point],
         return [(v, active, not split or i == motion.before.active_cube)
                 for i, (v, active) in enumerate(motion_meshes(roll))]
     t = (motion.progress - FALL_ROLL_END) / (1 - FALL_ROLL_END)
-    # Tipping over an edge starts slowly (t^2). A broken fragile tile (tip=None)
-    # gives way at once, so the block drops with some speed from the start.
-    drop = FALL_DISTANCE * (t * t if tip is not None else t * (0.4 + 0.6 * t))
-    result = []
+    # A broken fragile tile (tip=None) gives way at once, so the block drops
+    # with some speed from the start.
+    drop = FALL_DISTANCE * t * (0.4 + 0.6 * t)
     # Two split cubes can merge in the illegal pose, so look at `after` here.
     split_after = motion.after.orientation == Orientation.SPLIT
-    for i, (vertices, active) in enumerate(state_meshes(motion.after)):
-        moving = not split_after or i == motion.after.active_cube
+    meshes = [(vertices, active, not split_after or i == motion.after.active_cube)
+              for i, (vertices, active) in enumerate(state_meshes(motion.after))]
+    corners = [p for vertices, _, moving in meshes if moving for p in vertices]
+    centre = tuple(sum(p[i] for p in corners) / len(corners) for i in range(3))
+    result = []
+    for vertices, active, moving in meshes:
         if moving:
-            if tip is not None:
-                vertices = tip_mesh(vertices, tip, min(1.0, t * 1.8))
-                if t > 0.35:
-                    tumble = (t - 0.35) * 1.4
-                    axis_tumble = 1 if tip[0] == 0 else 0
-                    c_mid = sum(p[axis_tumble] for p in vertices) / len(vertices)
-                    ang_tumble = sin(tumble * pi * 0.8) * 0.45 * tip[1]
-                    tumbled = []
-                    for r, c, z in vertices:
-                        coord = list((r, c, z))
-                        off = coord[axis_tumble] - c_mid
-                        coord[axis_tumble] = c_mid + off * cos(ang_tumble) - z * sin(ang_tumble) * 0.2
-                        tumbled.append(tuple(coord))
-                    vertices = tumbled
-            vertices = [(r, c, z - drop) for r, c, z in vertices]
+            if tip is None or plan == 'straight':
+                vertices = [(r, c, z - drop) for r, c, z in vertices]
+            else:
+                vertices = _tip_free(vertices, tip, t, centre)
         result.append((vertices, active, moving))
     return result
+
+
+def cuboid_samples(corners: list[Point], steps: int = 4) -> list[Point]:
+    """Points spread over the surface of a (moved) cuboid given by its 8
+    corners in cuboid() order: every face gets a (steps+1)^2 grid."""
+    grid = [i / steps for i in range(steps + 1)]
+    points = []
+    for a in grid:
+        for b in grid:
+            low = [(1 - a) * (1 - b) * corners[0][i] + (1 - a) * b * corners[1][i]
+                   + a * b * corners[2][i] + a * (1 - b) * corners[3][i] for i in range(3)]
+            high = [(1 - a) * (1 - b) * corners[4][i] + (1 - a) * b * corners[5][i]
+                    + a * b * corners[6][i] + a * (1 - b) * corners[7][i] for i in range(3)]
+            for h in (grid if a in (0, 1) or b in (0, 1) else (0, 1)):
+                points.append(tuple(lo + (hi - lo) * h for lo, hi in zip(low, high)))
+    return points
 
 
 SINK_DEPTH = 2.05  # a standing block is 2 units tall: sink until fully inside
@@ -369,16 +451,69 @@ def sink_meshes(motion: MotionFrame) -> list[tuple[list[Point], bool]]:
             for vertices, active in state_meshes(motion.after)]
 
 
-def clip_below_floor(vertices: list[Point], faces, above: bool = True) -> tuple[list[Point], list[tuple[int, ...]]]:
-    """Cut every face at the board-top plane z = 0 and keep the part above it
-    (or, with above=False, the part below it).
+# Stage intro: the tiles fly in, then the block drops onto its start tile and
+# bounces like a heavy stone. It falls under gravity; each bounce keeps
+# INTRO_BOUNCE of the impact speed, and each impact squashes it for a moment.
+INTRO_SECONDS = 1.4        # the whole intro; the app turns it into intro_t 0..1
+INTRO_TILES_SECONDS = .85  # the tiles fly in within the first .85 s
+INTRO_DROP_START = .3      # seconds before the block is released
+INTRO_DROP_SECONDS = .42   # the first fall
+INTRO_DROP_HEIGHT = 7.0    # block units above the floor
+INTRO_BOUNCE = .36         # first bounce ~0.9 units high, second ~0.12
+INTRO_SQUASH = .1          # the first impact squashes the block to 90% height
+INTRO_CONTACT = .07        # seconds on the floor at the first impact
+
+
+def _intro_impacts() -> tuple[tuple[float, float], ...]:
+    """(time, speed) of each impact; speed 1.0 is the first, harder one."""
+    impacts, t, speed = [], INTRO_DROP_START + INTRO_DROP_SECONDS, 1.0
+    while speed >= .05:
+        impacts.append((t, speed))
+        t += INTRO_CONTACT * speed + 2 * INTRO_BOUNCE * speed * INTRO_DROP_SECONDS
+        speed *= INTRO_BOUNCE
+    return tuple(impacts)
+
+
+INTRO_IMPACTS = _intro_impacts()
+
+
+def intro_drop(t: float) -> tuple[float, float] | None:
+    """(height above the floor, squash 0..1) of the block t seconds into the
+    intro, or None before it is released."""
+    fall = t - INTRO_DROP_START
+    if fall < 0:
+        return None
+    if fall < INTRO_DROP_SECONDS:
+        u = fall / INTRO_DROP_SECONDS
+        return INTRO_DROP_HEIGHT * (1 - u * u), 0.0
+    hit, speed = next(i for i in reversed(INTRO_IMPACTS) if t >= i[0])
+    since, contact = t - hit, INTRO_CONTACT * speed
+    if since < contact:
+        return 0.0, INTRO_SQUASH * speed * sin(pi * since / contact)
+    u, up = (since - contact) / INTRO_DROP_SECONDS, INTRO_BOUNCE * speed
+    return max(0.0, INTRO_DROP_HEIGHT * (2 * up * u - u * u)), 0.0
+
+
+def squash_mesh(vertices: list[Point], squash: float) -> list[Point]:
+    """Flatten the block onto the floor by `squash` and widen it a little,
+    keeping its volume roughly the same."""
+    if not squash:
+        return vertices
+    cr = sum(p[0] for p in vertices) / len(vertices)
+    cc = sum(p[1] for p in vertices) / len(vertices)
+    wide = 1 + squash / 2
+    return [(cr + (r - cr) * wide, cc + (c - cc) * wide, z * (1 - squash)) for r, c, z in vertices]
+
+
+def clip_below_floor(vertices: list[Point], faces) -> tuple[list[Point], list[tuple[int, ...]]]:
+    """Cut every face at the board-top plane z = 0 and keep the part above it.
 
     Sutherland-Hodgman clipping against one plane: walk around each polygon,
     keep vertices on the wanted side and add the crossing point on edges that
     cross the plane. Faces entirely on the other side disappear.
     """
     def keep(point):
-        return (point[2] >= 0) == above
+        return point[2] >= 0
 
     points, result = [], []
     for face in faces:
@@ -435,7 +570,6 @@ class IsometricRenderer:
         self._top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
         self._shadow_surf = None
         self._tile_sprites = []
-        self._bridge_tile_sprites = {}
         self._landing_bursts = []
         self._last_landing_id = None
         self.pixel_scale = 1
@@ -448,10 +582,9 @@ class IsometricRenderer:
         self._frame_key=None
         self.material_cache.clear()
         self._tile_sprites = []
-        if hasattr(self, '_bridge_tile_sprites'):
-            self._bridge_tile_sprites.clear()
         self._landing_bursts = []
         self._last_landing_id = None
+        self._fall_plans = {}
 
     def set_view(self, view: str) -> None:
         """Switch camera view (one of VIEWS) and refit the board."""
@@ -462,8 +595,6 @@ class IsometricRenderer:
 
     def resize(self, size: tuple[int, int]) -> None:
         self.size = size
-        if hasattr(self, '_bridge_tile_sprites'):
-            self._bridge_tile_sprites.clear()
         if self.stage is None:
             return
         cells = [(r, c) for r, row in enumerate(self.stage.grid) for c, tile in enumerate(row)
@@ -501,10 +632,7 @@ class IsometricRenderer:
         return ((x - self.size[0] / 2) * self.zoom + self.size[0] / 2 + self.pan[0],
                 (y - self.size[1] / 2) * self.zoom + self.size[1] / 2 + self.pan[1])
 
-    def _faces(self, vertices, color, outline=None, faces=FACES, player=False, cut=False):
-        """cut=True: the faces were split at the board top by clip_below_floor().
-        The 4th item of each result is then a per-edge flag marking the cut
-        edges (z = 0), so _block_face() can leave them without a seam line."""
+    def _faces(self, vertices, color, outline=None, faces=FACES, player=False):
         result = []
         for face in faces:
             points = [vertices[i] for i in face]
@@ -513,9 +641,6 @@ class IsometricRenderer:
                        for p, q in zip(projected, projected[1:] + projected[:1]))
             if area <= 0.001:
                 continue
-            if cut:
-                outline = tuple(abs(p[2]) < 1e-9 and abs(q[2]) < 1e-9
-                                for p, q in zip(points, points[1:] + points[:1]))
             depth = sum(self.camera.depth(*p) for p in points) / len(points)
             a, b, c = points[:3]
             u, v = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
@@ -577,11 +702,187 @@ class IsometricRenderer:
         if base_key not in self._base_cache:
             for _ in self._compose_board(shown, active_cells, base_key):
                 pass
-        self._base, self._top_mask, self._shadow_surf, self._tile_sprites = self._base_cache[base_key]
+        self._base_cache[base_key] = entry = self._base_cache.pop(base_key)  # most recently used last
+        self._base, self._top_mask, self._shadow_surf, self._tile_sprites = entry
         if self._frame.get_size() != self.size:
             self._frame=pygame.Surface(self.size,pygame.SRCALPHA)
         self._frame_key=None
         self.stats['cached_layer_bytes']=self.size[0]*self.size[1]*4*3
+
+    def _bridge_area(self, changing_bridges):
+        """Screen area that differs between boards with and without these bridges."""
+        key = (self._base_key(()), tuple(changing_bridges))
+        if getattr(self, '_bridge_area_key', None) != key:
+            area = None
+            for cell, index in self.bridge_cells.items():
+                if index in changing_bridges:
+                    sprite, position, _ = self._tile_sprite(*cell)
+                    rect = sprite.get_rect(topleft=position)
+                    area = rect if area is None else area.union(rect)
+            margin = int(4 * self.pixel_scale)
+            area = (area or pygame.Rect(0, 0, 0, 0)).inflate(2 * margin, 2 * margin)
+            self._bridge_area_cache = area.clip(pygame.Rect((0, 0), self.size))
+            self._bridge_area_key = key
+        return self._bridge_area_cache
+
+    def _draw_falling(self, canvas, meshes):
+        """Draw the falling block over the board, then draw back over it the
+        tiles that are in front of it (in_front). The block never goes into a
+        tile (see _fall_plan), so this is right whichever side it falls off,
+        toward the viewer, away from them or down a hole."""
+        faces = []
+        for vertices, active in meshes:
+            bevelled, indices = bevel_mesh(vertices, .04, uniform=True)
+            color = tuple(min(255, c + 18) for c in self.BLOCK) if active else self.BLOCK
+            faces.extend(self._faces(bevelled, color, faces=indices, player=True))
+        if not faces:
+            return
+        for _, pts, color, cut in sorted(faces, key=lambda item: item[0]):
+            self._block_face(canvas, pts, color, cut)
+        xs = [x for _, pts, _, _ in faces for x, _ in pts]
+        ys = [y for _, pts, _, _ in faces for _, y in pts]
+        area = pygame.Rect(floor(min(xs)) - 2, floor(min(ys)) - 2, ceil(max(xs) - min(xs)) + 5,
+                           ceil(max(ys) - min(ys)) + 5).clip(canvas.get_rect())
+        if not area.width or not area.height:
+            return
+        corners = [p for vertices, _ in meshes for p in vertices]
+        gap, thickness = TILE_GAP, tile_thickness(self.camera.view)
+        cover = None  # where tiles in front of the block are: alpha of their sprites
+        for _, sprite, (x0, y0), (r, c), *_ in self._tile_sprites:
+            if not area.colliderect(sprite.get_rect(topleft=(x0, y0))):
+                continue
+            tile = cuboid(r + gap, c + gap, -thickness, 1 - 2 * gap, 1 - 2 * gap, thickness)
+            if in_front(corners, tile, self.camera):
+                continue
+            if cover is None:
+                cover = pygame.Surface(area.size, pygame.SRCALPHA)
+                cover.fill((255, 255, 255, 0))
+            cover.blit(sprite, (x0 - area.x, y0 - area.y), special_flags=pygame.BLEND_RGBA_MAX)
+        if cover is not None:
+            # The outline on each tile top is drawn half transparent; it must
+            # still hide the block, so strengthen the cover (alpha x4).
+            for _ in range(2):
+                cover.blit(cover.copy(), (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            if canvas.get_flags() & pygame.SRCALPHA:
+                # Erase the block there first, so it does not show through the
+                # half transparent pixels of the board.
+                hole = pygame.Surface(area.size, pygame.SRCALPHA)
+                hole.fill((0, 0, 0, 255))
+                hole.blit(cover, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)  # alpha = 255 - cover
+                hole.fill((255, 255, 255, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                canvas.blit(hole, area, special_flags=pygame.BLEND_RGBA_MULT)
+            # The finished board (moss and all) shows through those tile shapes.
+            patch = pygame.Surface(area.size, pygame.SRCALPHA)
+            patch.blit(self._base, (0, 0), area)
+            patch.blit(cover, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            canvas.blit(patch, area)
+
+    def _block_shadow(self, canvas, meshes, fade=1.0):
+        """The block's cast shadow on the tile tops, scaled by fade (0..1)."""
+        # Work only on the small projected shadow footprint, not the full viewport.
+        hulls=[self._hull([self.project((r+z*.65,c-z*.16,.01)) for r,c,z in vertices]) for vertices,_ in meshes]
+        all_points=[p for hull in hulls for p in hull]
+        bounds=pygame.Rect(0,0,0,0)
+        if all_points:
+            x,y=floor(min(p[0] for p in all_points))-4,floor(min(p[1] for p in all_points))-4
+            bounds=pygame.Rect(x,y,ceil(max(p[0] for p in all_points))-x+5,ceil(max(p[1] for p in all_points))-y+5).clip(canvas.get_rect())
+        min_z = max(0.0, min((p[2] for vertices, _ in meshes for p in vertices), default=0.0))
+        shadow_alpha = int(max(24, int(82 - min(min_z, 1.2) * 48)) * fade)
+        if bounds.width and bounds.height and shadow_alpha > 0:
+            shadow_tint = {'dream': (92, 58, 88), 'forest': (18, 30, 22), 'blueprint': (14, 38, 54)}.get(self.style, (72, 52, 78))
+            contact=pygame.Surface(bounds.size,pygame.SRCALPHA)
+            for hull in hulls:
+                if len(hull)>=3:
+                    pygame.draw.polygon(contact,(*shadow_tint, shadow_alpha),[(a-bounds.x,b-bounds.y) for a,b in hull])
+            contact.blit(self._top_mask,(0,0),bounds,special_flags=pygame.BLEND_RGBA_MULT)
+            canvas.blit(contact,bounds)
+
+    def _landing_dust(self, canvas, meshes, t, front):
+        """Dust pushed out from under the block by the harder intro impacts.
+        front=False draws the puffs behind the block, front=True the others."""
+        points = [p for vertices, _ in meshes for p in vertices]
+        r0, r1 = min(p[0] for p in points), max(p[0] for p in points)
+        c0, c1 = min(p[1] for p in points), max(p[1] for p in points)
+        cr, cc, hr, hc = (r0 + r1) / 2, (c0 + c1) / 2, (r1 - r0) / 2, (c1 - c0) / 2
+        middle = self.camera.depth(cr, cc, 0)
+        color = {'dream': (196, 166, 176), 'forest': (226, 214, 180), 'blueprint': (146, 182, 202)}.get(self.style, (204, 190, 176))
+        puffs = []
+        for hit, speed in INTRO_IMPACTS:
+            u = (t - hit) / .55
+            if speed < .3 or not 0.0 <= u < 1.0:
+                continue
+            ease = 1.0 - (1.0 - u) ** 3
+            alpha = int(170 * speed * (1.0 - u) ** 1.5)
+            for i in range(16):
+                seed = (i * 53) % 10 / 10
+                ang = i * pi / 8 + seed * .3
+                er, ec = cos(ang), sin(ang)
+                k = min(hr / max(abs(er), 1e-6), hc / max(abs(ec), 1e-6))  # from the centre to the footprint edge
+                spread = (.18 + .3 * seed) * speed * ease
+                pr, pc = cr + er * (k + spread), cc + ec * (k + spread)
+                if (self.camera.depth(pr, pc, 0) > middle) != front:
+                    continue
+                x, y = self.project((pr, pc, .3 * speed * ease * (.5 + seed)))
+                puffs.append((x, y, self.camera.tile_width * (.04 + .06 * ease) * (.7 + seed * .6), alpha))
+        if not puffs:
+            return
+        x0, y0 = floor(min(x - s for x, _, s, _ in puffs)) - 1, floor(min(y - s for _, y, s, _ in puffs)) - 1
+        x1, y1 = ceil(max(x + s for x, _, s, _ in puffs)) + 1, ceil(max(y + s for _, y, s, _ in puffs)) + 1
+        # Drawn on their own layer, so the puffs blend over the tiles instead of
+        # replacing their pixels with see-through ones.
+        layer = pygame.Surface((max(1, x1 - x0), max(1, y1 - y0)), pygame.SRCALPHA)
+        for x, y, s, alpha in puffs:
+            pygame.draw.circle(layer, (*color, alpha), (x - x0, y - y0), max(1.0, s))
+        canvas.blit(layer, (x0, y0))
+
+    def _still_block(self, state, meshes):
+        """The resting block drawn once into a small sprite: (surface, position)."""
+        key = (state, self.size, self.camera, self.zoom, tuple(self.pan), self.style, self.high_contrast, self.BLOCK)
+        if getattr(self, '_still_block_key', None) != key:
+            faces = []
+            for vertices, active in meshes:
+                vertices, indices = bevel_mesh(vertices, .04, uniform=True)
+                color = tuple(min(255, c + 18) for c in self.BLOCK) if active else self.BLOCK
+                faces.extend(self._faces(vertices, color, faces=indices, player=True))
+            points = [p for _, pts, _, _ in faces for p in pts] or [(0, 0)]
+            x0, y0 = floor(min(p[0] for p in points)) - 2, floor(min(p[1] for p in points)) - 2
+            x1, y1 = ceil(max(p[0] for p in points)) + 2, ceil(max(p[1] for p in points)) + 2
+            sprite = pygame.Surface((max(1, x1 - x0), max(1, y1 - y0)), pygame.SRCALPHA)
+            for _, pts, color, cut in sorted(faces, key=lambda item: item[0]):
+                self._block_face(sprite, [(x - x0, y - y0) for x, y in pts], color, cut, origin=(x0, y0))
+            self._still_block_sprite = (sprite, (x0, y0))
+            self._still_block_key = key
+        return self._still_block_sprite
+
+    def want_boards(self, bridge_states):
+        """Bridge layouts (bridges_status tuples) the player can reach soon.
+
+        Their boards are composed ahead of time, ~2 ms per frame (see
+        _prebuild_wanted), so pressing a switch never has to build one."""
+        self._wanted_states = tuple(bridge_states)
+
+    def _prebuild_wanted(self, budget):
+        if self.stage is None or not getattr(self, '_base_cache', None):
+            return
+        deadline = time.perf_counter() + budget
+        for status in getattr(self, '_wanted_states', ()):
+            shown = _Bridges(tuple(status))
+            cells = self._active_cells(shown)
+            if not self._advance_board(shown, cells, self._base_key(cells), deadline):
+                return
+
+    def _advance_board(self, shown, cells, key, deadline):
+        """Compose the board `key` until `deadline`; True once it is cached."""
+        if key in self._base_cache:
+            return True
+        if getattr(self, '_prebuild_key', None) != key:
+            self._prebuild = self._compose_board(shown, cells, key)
+            self._prebuild_key = key
+        for _ in self._prebuild:  # breaking out keeps the generator resumable
+            if time.perf_counter() > deadline:
+                return False
+        self._prebuild_key = None  # finished (or evicted since): start afresh next time
+        return key in self._base_cache
 
     def _compose_board(self, shown, active_cells, base_key):
         """Compose one board (blueprint guides, tiles) into the cache.
@@ -591,31 +892,9 @@ class IsometricRenderer:
         base = pygame.Surface(self.size, pygame.SRCALPHA)
         yield
         top_mask = pygame.Surface(self.size, pygame.SRCALPHA)
-        # Volumetric under-island ambient drop shadow for all 3 themes
-        shadow_colors = {
-            'dream': (120, 70, 98, 95),       # Soft dreamy lavender-mauve shadow onto clouds
-            'forest': (14, 26, 18, 130),      # Deep misty canopy shadow
-            'blueprint': (8, 22, 38, 115),    # Blueprint drafting depth shadow
-        }
-        shadow_color = shadow_colors.get(self.style, (25, 25, 35, 100))
-        raw_shadow = pygame.Surface(self.size, pygame.SRCALPHA)
-        for r, c in active_cells:
-            fp = [self.project((r + dr, c + dc, -0.58)) for dr, dc in ((0, 0), (0, 1), (1, 1), (1, 0))]
-            pygame.draw.polygon(raw_shadow, shadow_color, fp)
-
-        sw, sh = self.size
-        # Pass 1: Broad diffused ambient drop shadow (offset +14px down)
-        tiny1 = pygame.transform.smoothscale(raw_shadow, (max(1, sw // 6), max(1, sh // 6)))
-        soft1 = pygame.transform.smoothscale(tiny1, (sw, sh))
-
-        # Pass 2: Closer contact drop shadow (offset +6px down)
-        tiny2 = pygame.transform.smoothscale(raw_shadow, (max(1, sw // 3), max(1, sh // 3)))
-        soft2 = pygame.transform.smoothscale(tiny2, (sw, sh))
-
-        shadow_surf = pygame.Surface(self.size, pygame.SRCALPHA)
-        shadow_surf.blit(soft1, (0, 14))
-        shadow_surf.blit(soft2, (0, 6))
-        base.blit(shadow_surf, (0, 0))
+        # No drop shadow under the islands (removed: rebuilding it whenever a
+        # bridge appeared or disappeared made those moments stutter).
+        shadow_surf = None
         yield
         if self.style == 'blueprint':
             # Blueprint datum floor footprint & architectural projection lines
@@ -661,6 +940,7 @@ class IsometricRenderer:
             base.blit(tile_surf, position)
             if i % 8 == 7:
                 yield
+        yield
         for r, c in active_cells:
             top = [self.project(p) for p in cuboid(r + .012, c + .012, 0, .976, .976, 0)[:4]]
             pygame.draw.polygon(top_mask, (255, 255, 255, 255), top)
@@ -672,9 +952,14 @@ class IsometricRenderer:
         # Bridge tiles are drawn ahead of time, so the frame a bridge settles on
         # only re-blits sprites.
         for r, c in self.bridge_cells:
-            self._tile_sprite(r, c)
-        if len(self._base_cache) >= 4:  # bounded: a handful of full-size layers
-            self._base_cache.pop(next(iter(self._base_cache)))
+            if (r, c) not in getattr(self, '_tile_sprite_cache', {}):
+                yield
+                self._tile_sprite(r, c)
+        if len(self._base_cache) >= 6:  # bounded: drop the least recently used board,
+            for old_key, old_entry in self._base_cache.items():  # never the one on screen
+                if old_entry[0] is not getattr(self, '_base', None):
+                    self._base_cache.pop(old_key)
+                    break
         self._base_cache[base_key] = (base, top_mask, shadow_surf, tile_sprites)
 
     def _tile_sprite(self, r, c):
@@ -746,6 +1031,39 @@ class IsometricRenderer:
             return (r, c)
         return None
 
+    def _fall_plan(self, motion: MotionFrame, tip: Tip | None) -> str:
+        """The first of FALL_PLANS that keeps the falling block out of every
+        tile. Checked once per fall, at a few dozen moments of it."""
+        if tip is None:
+            return 'straight'
+        plans = self.__dict__.setdefault('_fall_plans', {})
+        key = (motion.before, motion.after, motion.action, self.camera.view)
+        if key not in plans:
+            plans[key] = next((plan for plan in FALL_PLANS if not self._fall_hits_tiles(motion, tip, plan)),
+                              FALL_PLANS[0])
+        return plans[key]
+
+    def _fall_hits_tiles(self, motion: MotionFrame, tip: Tip, plan: str) -> bool:
+        thickness, margin = tile_thickness(self.camera.view), .02
+        tiles = {}
+        for k in range(1, 21):
+            frame = MotionFrame(motion.before, motion.after, motion.action,
+                                FALL_ROLL_END + (1 - FALL_ROLL_END) * k / 20, falling=True)
+            for vertices, _, moving in fall_meshes(frame, tip, plan):
+                if not moving or min(p[2] for p in vertices) > -margin:
+                    continue
+                if max(p[2] for p in vertices) < -thickness:
+                    continue  # already below the board
+                for r, c, z in cuboid_samples(vertices, 3):
+                    if not -thickness + margin < z < -margin:
+                        continue
+                    cell = (floor(r), floor(c))
+                    if cell not in tiles:
+                        tiles[cell] = self._supported(cell, motion.after.bridges_status)
+                    if tiles[cell] and min(r - cell[0], cell[0] + 1 - r, c - cell[1], cell[1] + 1 - c) > margin:
+                        return True
+        return False
+
     def _tip(self, pose: GameState, action: Action) -> Tip | None:
         """Which edge the falling block topples over (see tip_mesh).
 
@@ -790,7 +1108,9 @@ class IsometricRenderer:
                 half.append(point)
             halves.extend(half[:-1])
         return halves
-    def _block_face(self, surface, points, color, cut=None):
+    def _block_face(self, surface, points, color, cut=None, origin=(0, 0)):
+        """origin: where `surface` sits on the board, when drawing into a sprite;
+        the sparkles are seeded by the face's board position, so they match."""
         pts = [(round(x), round(y)) for x, y in points]
         if not self._can_texture(surface, pts):
             return
@@ -853,7 +1173,7 @@ class IsometricRenderer:
         # Embedded theme-coherent sparkles & glints
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
-        seed = int(abs(cx * 73 + cy * 127)) % 10000
+        seed = int(abs((cx + origin[0]) * 73 + (cy + origin[1]) * 127)) % 10000
         rng = random.Random(seed)
 
         # Micro-sparkle flecks
@@ -910,141 +1230,6 @@ class IsometricRenderer:
         box=pygame.Rect(min(xs),min(ys),max(xs)-min(xs)+1,max(ys)-min(ys)+1)
         return max(ys)>min(ys) and box.colliderect(surface.get_clip())
 
-    def _get_bridge_sprite(self, coord):
-        if not hasattr(self, '_bridge_tile_sprites'):
-            self._bridge_tile_sprites = {}
-        if coord in self._bridge_tile_sprites:
-            return self._bridge_tile_sprites[coord]
-        r, c = coord
-        vertices, indices = bevel_mesh(cuboid(r + .012, c + .012, -.32, .976, .976, .32), .02)
-        faces = self._faces(vertices, self.BLOCK, faces=indices, player=True)
-        all_pts = [p for _, pts, _, _ in faces for p in pts]
-        min_x = floor(min(p[0] for p in all_pts)) - 4
-        max_x = ceil(max(p[0] for p in all_pts)) + 4
-        min_y = floor(min(p[1] for p in all_pts)) - 4
-        max_y = ceil(max(p[1] for p in all_pts)) + 4
-        bw = max(4, max_x - min_x + 1)
-        bh = max(4, max_y - min_y + 1)
-        spr = pygame.Surface((bw, bh), pygame.SRCALPHA)
-        for _, pts, color, cut in sorted(faces, key=lambda it: it[0]):
-            local_pts = [(p[0] - min_x, p[1] - min_y) for p in pts]
-            self._block_face(spr, local_pts, color, cut)
-        self._bridge_tile_sprites[coord] = (spr, (min_x, min_y))
-        return self._bridge_tile_sprites[coord]
-
-    def _render_bridge_shatter(self, surface, coord, p):
-        """Render 12 3D tumbling debris shards falling past bottom frame, dense dust cloud, and collapse wave."""
-        br, bc = coord
-        p = max(0.0, min(1.0, p))
-
-        # 1. Collapse shockwave at floor plane z = 0.01
-        if p <= 0.45:
-            p_w = p / 0.45
-            c_pt = self.project((br + 0.5, bc + 0.5, 0.01))
-            rx = int((14.0 + p_w * 54.0) * self.zoom)
-            ry = int(rx * 0.48)
-            alpha = int(210 * (1.0 - p_w))
-            if rx > 2 and ry > 2 and alpha > 0:
-                w_col = {'dream': (255, 185, 215, alpha), 'forest': (255, 215, 60, alpha), 'blueprint': (80, 225, 255, alpha)}.get(self.style, (255, 255, 255, alpha))
-                pygame.draw.ellipse(surface, w_col, (c_pt[0] - rx, c_pt[1] - ry, rx * 2, ry * 2), max(1, int(2.5 * (1.0 - p_w) * self.zoom)))
-
-        # 2. 12 3D Tumbling Debris Shards falling all the way down past the bottom screen
-        shard_alpha = 255 if p < 0.65 else max(0, int(255 * (1.0 - (p - 0.65) / 0.35)))
-
-        # Theme colors for shards matching the player block cuboid
-        if self.style == 'forest':
-            c_top = (255, 240, 172, shard_alpha)
-            c_side = (148, 102, 28, shard_alpha)
-            edge_col = (255, 250, 200, shard_alpha)
-            dust_main = (235, 205, 140)
-            dust_sparkle = (255, 245, 190)
-        elif self.style == 'blueprint':
-            c_top = (255, 172, 115, shard_alpha)
-            c_side = (148, 48, 20, shard_alpha)
-            edge_col = (255, 210, 175, shard_alpha)
-            dust_main = (160, 220, 245)
-            dust_sparkle = (220, 245, 255)
-        else:  # dream
-            c_top = (255, 226, 236, shard_alpha)
-            c_side = (210, 98, 140, shard_alpha)
-            edge_col = (255, 255, 255, shard_alpha)
-            dust_main = (255, 210, 230)
-            dust_sparkle = (255, 245, 250)
-
-        perim = [
-            (br + 0.05, bc + 0.05), (br + 0.05, bc + 0.50), (br + 0.05, bc + 0.95),
-            (br + 0.50, bc + 0.95), (br + 0.95, bc + 0.95), (br + 0.95, bc + 0.50),
-            (br + 0.95, bc + 0.05), (br + 0.50, bc + 0.05)
-        ]
-        center = (br + 0.50, bc + 0.50)
-        dz = -0.6 * p - 13.5 * (p ** 1.85)  # Plummets all the way past the bottom frame!
-
-        shard_commands = []
-        for k in range(8):
-            pa = perim[k]
-            pb = perim[(k + 1) % 8]
-            ang = k * pi / 4.0 + pi / 8.0
-            dr = cos(ang) * 0.62 * p
-            dc = sin(ang) * 0.62 * p
-            rot_tumble = p * 4.2 * (1.0 if k % 2 == 0 else -1.0)
-
-            s_mid_r = (center[0] + pa[0] + pb[0]) / 3.0 + dr
-            s_mid_c = (center[1] + pa[1] + pb[1]) / 3.0 + dc
-
-            pts_local = []
-            for pr, pc in (center, pa, pb):
-                dpr = (pr - center[0]) * 0.88
-                dpc = (pc - center[1]) * 0.88
-                r_rot = dpr * cos(rot_tumble) - dpc * sin(rot_tumble)
-                c_rot = dpr * sin(rot_tumble) + dpc * cos(rot_tumble)
-                pts_local.append((s_mid_r + r_rot, s_mid_c + c_rot))
-
-            top_shard = [self.project((pr, pc, dz)) for pr, pc in pts_local]
-            bot_shard = [self.project((pr, pc, dz - 0.16)) for pr, pc in pts_local]
-            depth = self.camera.depth(s_mid_r, s_mid_c, dz)
-            shard_commands.append((depth, top_shard, bot_shard))
-
-        # 4 center core diamond shards
-        for k in range(4):
-            ang = k * pi / 2.0
-            dr = cos(ang) * 0.35 * p
-            dc = sin(ang) * 0.35 * p
-            rot_tumble = p * 5.0 * (-1.0 if k % 2 == 0 else 1.0)
-            c_mid_r = center[0] + dr
-            c_mid_c = center[1] + dc
-            diamond_pts = [
-                (0.0, 0.14), (0.14, 0.0), (0.0, -0.14), (-0.14, 0.0)
-            ]
-            pts_local = []
-            for dpr, dpc in diamond_pts:
-                r_rot = dpr * cos(rot_tumble) - dpc * sin(rot_tumble)
-                c_rot = dpr * sin(rot_tumble) + dpc * cos(rot_tumble)
-                pts_local.append((c_mid_r + r_rot, c_mid_c + c_rot))
-            top_shard = [self.project((pr, pc, dz)) for pr, pc in pts_local]
-            bot_shard = [self.project((pr, pc, dz - 0.16)) for pr, pc in pts_local]
-            depth = self.camera.depth(c_mid_r, c_mid_c, dz)
-            shard_commands.append((depth, top_shard, bot_shard))
-
-        for _, top_shard, bot_shard in sorted(shard_commands, key=lambda it: it[0]):
-            pygame.draw.polygon(surface, c_side, [top_shard[1], top_shard[2], bot_shard[2], bot_shard[1]])
-            pygame.draw.polygon(surface, c_top, top_shard)
-            pygame.draw.aalines(surface, edge_col, True, top_shard)
-
-        # 3. Dense Billowing Dust Storm (36 volumetric particles rendered directly on surface)
-        for i in range(36):
-            seed = int(br * 43 + bc * 89 + i * 23)
-            ang = ((seed % 360) * pi / 180.0)
-            spd = 0.25 + (seed % 10) * 0.055
-            dust_r = br + 0.5 + cos(ang) * spd * (p ** 0.60)
-            dust_c = bc + 0.5 + sin(ang) * spd * (p ** 0.60)
-            dust_z = 0.25 * sin(pi * p) - 0.75 * p - (seed % 5) * 0.04
-            pt = self.project((dust_r, dust_c, dust_z))
-            dust_a = max(0, int(220 * sin(pi * max(0.01, min(0.99, p))) * (1.0 - p * 0.45)))
-            if dust_a > 0:
-                rad = max(2, int((3 + (seed % 6) + p * 8) * self.zoom))
-                col = (*dust_main, dust_a) if i % 3 != 0 else (*dust_sparkle, dust_a)
-                pygame.draw.circle(surface, col, (round(pt[0]), round(pt[1])), rad)
-
     def draw(self, surface, state, motion=None, intro_t=None, outro_t=None, shockwave=None,
              bridges=None, clear=True):
         """Draw the board for `state` (with `motion`, if a roll is running) onto `surface`.
@@ -1075,14 +1260,14 @@ class IsometricRenderer:
         shown = motion.before if motion and motion.progress < .65 else state
         broken = (self._broken_tile(motion.after)
                   if motion and motion.falling and motion.progress >= FALL_ROLL_END else None)
-        static_key = (self.size, self.camera, self.zoom, tuple(self.pan), self.high_contrast, shown.bridges_status, changing_bridges, broken)
+        static_key = (self.size, self.camera, self.zoom, tuple(self.pan), self.high_contrast, shown.bridges_status,
+                      changing_bridges, broken)
         material_key = (self.size, self.camera, self.zoom, self.high_contrast, self.style)
         if material_key != self._material_key:
             self.material_cache.clear()
-            if hasattr(self, '_bridge_tile_sprites'):
-                self._bridge_tile_sprites.clear()
             self._material_key = material_key
-        if static_key != self._static_key:
+        busy_frame = static_key != self._static_key  # no prebuilding on top of a board switch
+        if busy_frame:
             self._build_static(shown, broken, changing_bridges=changing_bridges)
             self._static_key = static_key
 
@@ -1095,28 +1280,18 @@ class IsometricRenderer:
             target_key = self._base_key(target_cells)
             target = self._base_cache.get(target_key)
             if target is None:
-                if getattr(self, '_prebuild_key', None) != target_key:
-                    self._prebuild = self._compose_board(landed, target_cells, target_key)
-                    self._prebuild_key = target_key
-                deadline = time.perf_counter() + .002
-                for _ in self._prebuild:  # breaking out keeps the generator resumable
-                    if time.perf_counter() > deadline:
-                        break
+                self._advance_board(landed, target_cells, target_key, time.perf_counter() + .002)
                 target = self._base_cache.get(target_key)
 
         if intro_t is not None:
-            # Map Assembly Intro: Chaotic multi-directional arrival, with shadow ONLY appearing after map is formed
+            # Stage intro: the tiles fly in from all sides, then the block drops
+            # onto its start tile and bounces (see intro_drop()).
+            t = intro_t * INTRO_SECONDS
+            tiles_t = t / INTRO_TILES_SECONDS
             self._frame.fill((0, 0, 0, 0))
-            if getattr(self, '_shadow_surf', None) is not None and intro_t >= 0.58:
-                shadow_p = max(0.0, min(1.0, (intro_t - 0.58) / 0.38))
-                shadow_alpha = int(255 * (shadow_p ** 1.8))
-                if shadow_alpha > 0:
-                    self._shadow_surf.set_alpha(shadow_alpha)
-                    self._frame.blit(self._shadow_surf, (0, 0))
-                    self._shadow_surf.set_alpha(255)
 
             for depth, spr, (x0, y0), (r, c), delay, theta_base, radius_base in self._tile_sprites:
-                p = max(0.0, min(1.0, (intro_t - delay) / 0.55))
+                p = max(0.0, min(1.0, (tiles_t - delay) / 0.55))
                 ease = 1.0 - (1.0 - p) ** 3
                 scatter_dist = radius_base * 0.70
                 dx = int(cos(theta_base) * scatter_dist * (1.0 - ease))
@@ -1130,24 +1305,32 @@ class IsometricRenderer:
                     else:
                         self._frame.blit(spr, (x0 + dx, y0 + dy))
 
-            # Block falling down from above after tiles begin assembling
-            block_p = max(0.0, min(1.0, (intro_t - 0.35) / 0.65))
-            if block_p > 0.0:
-                block_ease = 1.0 - (1.0 - block_p) ** 3
-                block_dz = 7.0 * (1.0 - block_ease)
+            drop = intro_drop(t)
+            if drop is not None:
+                height, squash = drop
                 meshes = state_meshes(state)
+                # The shadow darkens as the block comes down onto it.
+                self._block_shadow(self._frame, meshes, fade=(1.0 - height / INTRO_DROP_HEIGHT) ** 2)
+                self._landing_dust(self._frame, meshes, t, front=False)
                 block_faces = []
                 for vertices, active in meshes:
-                    v_elevated = [(r, c, z + block_dz) for r, c, z in vertices]
+                    v_elevated = [(r, c, z + height) for r, c, z in squash_mesh(vertices, squash)]
                     v_elevated, indices = bevel_mesh(v_elevated, 0.04, uniform=True)
                     color = tuple(min(255, c + 18) for c in self.BLOCK) if active else self.BLOCK
                     block_faces.extend(self._faces(v_elevated, color, faces=indices, player=True))
                 for _, pts, color, cut in sorted(block_faces, key=lambda it: it[0]):
                     self._block_face(self._frame, pts, color, cut)
+                self._landing_dust(self._frame, meshes, t, front=True)
 
+            # The board gives a little under each impact: a short damped dip.
+            jolt = 0.0
+            for hit, speed in INTRO_IMPACTS:
+                if 0.0 <= t - hit < .3:
+                    since = t - hit
+                    jolt += self.camera.tile_width * .05 * speed * math.exp(-since * 14) * sin(since * 2 * pi / .16)
             if clear:
                 surface.fill((0, 0, 0, 0) if surface.get_flags() & pygame.SRCALPHA else self.BACKGROUND)
-            surface.blit(self._frame, (0, 0))
+            surface.blit(self._frame, (0, round(jolt)))
             self._frame_key = None
             return
 
@@ -1190,6 +1373,7 @@ class IsometricRenderer:
         # is composed once into self._frame and reused.
         direct = not clear and (motion is not None or bridges is not None)
         canvas = surface if direct else self._frame
+        busy_frame = busy_frame or (not direct and key != self._frame_key)  # a still frame being recomposed
         if direct or key!=self._frame_key:
             self.stats['dynamic_frames']+=1
             if not direct:
@@ -1197,44 +1381,22 @@ class IsometricRenderer:
             falling=bool(motion and motion.falling)
             if falling:
                 tip=self._tip(motion.after,motion.action)
-                tagged=fall_meshes(motion,tip)
+                tagged=fall_meshes(motion,tip,self._fall_plan(motion,tip))
                 dropping=motion.progress>=FALL_ROLL_END
                 meshes=[(v,a) for v,a,_ in tagged]
-                # What is below the board top is drawn first and the board is
-                # blitted over it, so the board hides the block wherever it is in
-                # front of it (parallel projection makes this exact).
-                # Tipping away from the viewer (depth shrinks along the tip), each
-                # face is cut at the board top: drawing a face that straddles it
-                # on top would show the block through the board. Tipping toward
-                # the viewer, the board is behind the block, so only faces fully
-                # below the top go underneath (cutting there would let the
-                # board's thick front side cover the block).
-                # A straight drop through a broken tile is cut like the goal sink:
-                # the tiles around the hole hide what has gone below the top.
-                away=tip is None
-                if tip is not None:
-                    step=[0,0];step[tip[0]]=tip[1]
-                    away=self.camera.depth(step[0],step[1],0)<self.camera.depth(0,0,0)
-                under=[]
-                for vertices,active,moving in tagged:
-                    if not moving:continue
-                    vertices,indices=bevel_mesh(vertices,.04,uniform=True)
-                    color=tuple(min(255,c+18) for c in self.BLOCK) if active else self.BLOCK
-                    if away:
-                        vertices,indices=clip_below_floor(vertices,indices,above=False)
-                    else:
-                        indices=[f for f in indices if max(vertices[i][2] for i in f)<0]
-                    under.extend(self._faces(vertices,color,faces=indices,player=True,cut=away and dropping))
-                for _,pts,color,cut in sorted(under,key=lambda item:item[0]):self._block_face(canvas,pts,color,cut)
             else:
                 sinking=bool(motion and motion.sinking)
                 meshes=sink_meshes(motion) if sinking else motion_meshes(motion) if motion else state_meshes(state)
             canvas.blit(self._base,(0,0))
-            if target is not None and b_p > .7:
-                # Fade in the landed board over the end of the flight, so the
-                # bridge settles into it instead of popping in afterwards.
-                target[0].set_alpha(min(255, int(255 * (b_p - .7) / .3)))
-                canvas.blit(target[0], (0, 0))
+            # An appearing bridge blends into the final board as it arrives, so it
+            # does not pop in afterwards. Only the area around the changing
+            # bridges differs, so only that part is blended.
+            opening = any(n and not o for o, n in zip(old_bridges, new_bridges)) if changing_bridges else False
+            fade = (b_p - .55) / .45 if opening else 0.0
+            if target is not None and fade > 0:
+                area = self._bridge_area(changing_bridges)
+                target[0].set_alpha(min(255, int(255 * fade)))
+                canvas.blit(target[0], area.topleft, area)
                 target[0].set_alpha(255)
             # Physical switch depression when stepped on
             for coord in (shown.pos1, shown.pos2):
@@ -1258,7 +1420,7 @@ class IsometricRenderer:
                             br_r, br_c = coord
                             if not old_s and new_s:
                                 # 1. Bridge Opening: Launching from below the game window frame straight into place
-                                spr, (bx, by) = self._get_bridge_sprite(coord)
+                                spr, (bx, by), _ = self._tile_sprite(*coord)
                                 y_start = self.size[1] + 60
                                 b_ease = 1.0 - (1.0 - b_p) ** 3.0
                                 cur_y = int(by + (y_start - by) * (1.0 - b_ease))
@@ -1280,41 +1442,33 @@ class IsometricRenderer:
                                     snap_col = {'dream': (255, 220, 240, snap_a), 'forest': (255, 245, 160, snap_a), 'blueprint': (140, 240, 255, snap_a)}.get(self.style, (255, 255, 255, snap_a))
                                     pygame.draw.aalines(canvas, snap_col, True, top_p)
                             elif old_s and not new_s:
-                                # 2. Bridge Closing: Shatter into 12 3D tumbling debris shards falling past bottom frame + billowing dust
-                                self._render_bridge_shatter(canvas, coord, b_p)
+                                # 2. Bridge closing: the tile sinks a little, then fades out.
+                                spr, (bx, by), _ = self._tile_sprite(*coord)
+                                sink = self.camera.tile_width * .3 * (1.0 - (1.0 - min(1.0, b_p / .6)) ** 2)
+                                alpha = int(255 * (1.0 - max(0.0, (b_p - .2) / .8)) ** 1.3)
+                                if alpha > 0:
+                                    spr.set_alpha(alpha)
+                                    canvas.blit(spr, (bx, round(by + sink)))
+                                    spr.set_alpha(255)
 
-            # Work only on the small projected shadow footprint, not the full viewport.
             shadow_meshes=([(v,a) for v,a,moving in tagged if not moving] if falling and dropping
                            else [] if motion and motion.sinking else meshes)
-            hulls=[self._hull([self.project((r+z*.65,c-z*.16,.01)) for r,c,z in vertices]) for vertices,_ in shadow_meshes]
-            all_points=[p for hull in hulls for p in hull]
-            bounds=pygame.Rect(0,0,0,0)
-            if all_points:
-                x,y=floor(min(p[0] for p in all_points))-4,floor(min(p[1] for p in all_points))-4
-                bounds=pygame.Rect(x,y,ceil(max(p[0] for p in all_points))-x+5,ceil(max(p[1] for p in all_points))-y+5).clip(canvas.get_rect())
-            if bounds.width and bounds.height:
-                min_z = max(0.0, min((p[2] for vertices, _ in shadow_meshes for p in vertices), default=0.0))
-                shadow_alpha = max(24, int(82 - min(min_z, 1.2) * 48))
-                shadow_tint = {'dream': (92, 58, 88), 'forest': (18, 30, 22), 'blueprint': (14, 38, 54)}.get(self.style, (72, 52, 78))
-                contact=pygame.Surface(bounds.size,pygame.SRCALPHA)
-                for hull in hulls:
-                    if len(hull)>=3:
-                        pygame.draw.polygon(contact,(*shadow_tint, shadow_alpha),[(a-bounds.x,b-bounds.y) for a,b in hull])
-                contact.blit(self._top_mask,(0,0),bounds,special_flags=pygame.BLEND_RGBA_MULT)
-                canvas.blit(contact,bounds)
+            self._block_shadow(canvas,shadow_meshes)
+            if motion is None:
+                # The block stands still (e.g. while a bridge flies): reuse its picture.
+                sprite, position = self._still_block(state, meshes)
+                canvas.blit(sprite, position)
+                meshes = []
+            if falling:
+                self._draw_falling(canvas,[(v,a) for v,a,m in tagged if m])
+                meshes=[(v,a) for v,a,m in tagged if not m]  # the other split cube stays on the board
             faces=[]
-            moving=[m for _,_,m in tagged] if falling else [False]*len(meshes)
-            for (vertices,active),mesh_moving in zip(meshes,moving):
+            for vertices,active in meshes:
                 vertices,indices=bevel_mesh(vertices,.04,uniform=True)
                 color=tuple(min(255,c+18) for c in self.BLOCK) if active else self.BLOCK
-                if falling and away:  # the part below the board was already drawn under it
+                if motion and motion.sinking:  # the hole swallows what is below the floor
                     vertices,indices=clip_below_floor(vertices,indices)
-                elif falling:
-                    indices=[f for f in indices if max(vertices[i][2] for i in f)>=0]
-                elif motion and motion.sinking:  # the hole swallows what is below the floor
-                    vertices,indices=clip_below_floor(vertices,indices)
-                faces.extend(self._faces(vertices,color,faces=indices,player=True,
-                                         cut=falling and away and dropping and mesh_moving))
+                faces.extend(self._faces(vertices,color,faces=indices,player=True))
             for _,pts,color,cut in sorted(faces,key=lambda item:item[0]):self._block_face(canvas,pts,color,cut)
 
             # Fragile tile shatter, chunky stone shards & fine mineral dust particles
@@ -1361,6 +1515,8 @@ class IsometricRenderer:
             if clear:
                 surface.fill((0,0,0,0) if surface.get_flags()&pygame.SRCALPHA else self.BACKGROUND)
             surface.blit(self._frame,(0,0))
+        if not changing_bridges and not busy_frame:
+            self._prebuild_wanted(.002)
 
         # Companion Holographic 3D Faceted Diamond Beacon (active throughout entire game)
         # Hovers above 1x1 standing block, centered over 1x2 lying block, or over active cube in SPLIT mode

@@ -73,7 +73,10 @@ class SoundBank:
         for sound in self.sounds.values():
             sound.set_volume(self.volume)
 
-    def play(self, name: str = 'roll') -> None:
+    def play(self, name: str = 'roll', volume: float = 1.0) -> None:
+        """volume (0..1) scales this one play, e.g. for softer bounces."""
         sound = self.sounds.get(name)
         if sound is not None:
-            sound.play()
+            channel = sound.play()
+            if channel is not None:
+                channel.set_volume(volume)

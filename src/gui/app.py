@@ -11,11 +11,11 @@ from src.engine.problem import BloxorzProblem, GameSession
 from src.engine.state import Action, GameState, Orientation
 from src.gui.animation import RollAnimation
 from src.gui.replay import PathReplay
-from src.gui.renderer3d import IsometricRenderer, VIEWS
+from src.gui.renderer3d import IsometricRenderer, VIEWS, INTRO_SECONDS, INTRO_IMPACTS
 from src.gui.solver_gateway import ProcessSolverGateway
 from src.gui.contracts import SolverRequest, SolverStatus, ReplayStatus
 from src.gui import theme
-from src.gui.presentation import draw as draw_presentation, sharp_board
+from src.gui.presentation import draw as draw_presentation, draw_header_emblem, sharp_board
 
 ROOT = Path(__file__).resolve().parents[2]
 SAVE_PATH = ROOT / 'data' / 'gui_session.json'
@@ -304,10 +304,10 @@ class BloxorzApp:
             self.animation.duration_sec = self.FALL_SECONDS
             self.animation.start(before, fallen, action, falling=True)
 
-    def play_sfx(self, name):
+    def play_sfx(self, name, volume=1.0):
         """Play one sound effect (see src/gui/sfx.py) if sound is on."""
         if self.sound_enabled and self.sound:
-            self.sound.play(name)
+            self.sound.play(name, volume)
 
     def finish_fall(self):
         self.restart()
@@ -541,6 +541,7 @@ class BloxorzApp:
 
     def update(self, dt):
         self.animation.update(dt)
+        self._plan_bridge_boards()
         # Bridge timeline: (old status, new status, progress 0..1), independent of rolls.
         if self.bridge_fx is not None:
             old, new, progress = self.bridge_fx
@@ -556,7 +557,11 @@ class BloxorzApp:
             st += dt
             self.shockwave = (r, c, st) if st < 0.35 else None
         if self.intro_t is not None:
-            self.intro_t += dt / 0.85
+            before = self.intro_t * INTRO_SECONDS
+            self.intro_t += dt / INTRO_SECONDS
+            for hit, speed in INTRO_IMPACTS:  # the dropped block lands: a thud per bounce
+                if before < hit <= self.intro_t * INTRO_SECONDS:
+                    self.play_sfx('roll', volume=speed)
             if self.intro_t >= 1.0:
                 self.intro_t = None
                 self._presentation_cache = None
@@ -811,6 +816,32 @@ class BloxorzApp:
     def draw(self):
         return draw_presentation(self)
 
+    def _plan_bridge_boards(self):
+        """Tell the renderer which bridge layouts are up to two moves away, so it
+        composes those boards before a switch is pressed (no hitch when a
+        bridge appears or disappears). Recomputed only when the state changes."""
+        state = self.session.current_state
+        if getattr(self, '_planned_for', None) == state or not hasattr(self.renderer, 'want_boards'):
+            return
+        self._planned_for = state
+        problem = self.session.problem
+        wanted, seen, frontier = [], {state}, [state]
+        for _ in range(2):  # nearest moves first
+            following = []
+            for here in frontier:
+                for _, there, _ in problem.get_successors(here):
+                    if there.bridges_status != here.bridges_status:
+                        # Board while the bridges animate (changing ones left out), then after.
+                        during = tuple(a and b for a, b in zip(here.bridges_status, there.bridges_status))
+                        for status in (during, there.bridges_status):
+                            if status != state.bridges_status and status not in wanted:
+                                wanted.append(status)
+                    if there not in seen:
+                        seen.add(there)
+                        following.append(there)
+            frontier = following
+        self.renderer.want_boards(wanted)
+
     def board_outro(self):
         """Progress of the win outro for the renderer: running, 1.0 once the board
         has fallen away (it stays empty until the player moves on), else None."""
@@ -876,6 +907,13 @@ class BloxorzApp:
                                intro_t=getattr(self, 'intro_t', None), outro_t=self.board_outro(),
                                shockwave=getattr(self, 'shockwave', None), bridges=self.bridge_view(), clear=False)
             hi.blit(self._hi_board, rect)
+            emblem = getattr(self, '_emblem', None)
+            if emblem is not None:  # the bobbing header cube, drawn sharp every frame
+                bx, cy, style = emblem
+                area = pygame.Rect(round((bx - 12) * scale), round((cy - 12) * scale),
+                                   round(24 * scale), round(28 * scale)).clip(hi.get_rect())
+                hi.blit(self._hi_base[1], area.topleft, area)
+                draw_header_emblem(hi, bx, cy + math.sin(pygame.time.get_ticks() * 0.005) * 2.8, style, scale)
         if flip:
             self.window.flip()
 
