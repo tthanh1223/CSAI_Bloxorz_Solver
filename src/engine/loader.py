@@ -2,8 +2,8 @@ import json
 from enum import Enum
 from typing import Dict, List, Tuple
 
-from src.engine.switches import SwitchData, SwitchType
-from src.engine.state import Coord
+from src.engine.switches import BRIDGE_ACTIONS, BRIDGE_SWAP, SwitchData, SwitchType
+from src.engine.state import Coord, GameState, Orientation
 
 
 class TileType(Enum):
@@ -18,15 +18,19 @@ class TileType(Enum):
 class StageData:
     def __init__(self) -> None:
         self.grid: List[List[TileType]] = []
-        self.start: Coord = (0,0)
-        self.goal:  Coord = (0,0)
+        self.start: Coord = (0, 0)
+        self.goal: Coord = (0, 0)
         self.switches: Dict[Coord, SwitchData] = {}
         self.bridges: Dict[str, List[Coord]] = {}
         self.initial_bridge_mask: Tuple[bool, ...] = ()
 
 
+def initial_state(stage: StageData) -> GameState:
+    return GameState(stage.start, stage.start, Orientation.STANDING, 0, stage.initial_bridge_mask)
+
+
 def load_stage(json_filepath: str) -> StageData:
-    """Read a JSON stage and return its StageData representation."""
+    """Đọc một file JSON màn chơi và trả về StageData tương ứng."""
     with open(json_filepath, encoding="utf-8") as stage_file:
         raw_data = json.load(stage_file)
 
@@ -151,7 +155,7 @@ def load_stage(json_filepath: str) -> StageData:
                 or len(raw_action) != 2
                 or not isinstance(raw_action[0], int)
                 or isinstance(raw_action[0], bool)
-                or raw_action[1] not in ("on", "off", "swap")
+                or raw_action[1] not in BRIDGE_ACTIONS
             ):
                 raise ValueError(f"Invalid bridge action at switch {switch_coord}: {raw_action!r}.")
             bridge_id, action_name = raw_action
@@ -173,7 +177,7 @@ def load_stage(json_filepath: str) -> StageData:
         stage.switches[switch_coord] = SwitchData(
             type=switch_type,
             linked_bridges=tuple(index for index, _ in bridge_actions),
-            is_toggle=all(action == "swap" for _, action in bridge_actions),
+            is_toggle=all(action == BRIDGE_SWAP for _, action in bridge_actions),
             bridge_actions=tuple(bridge_actions),
             target_pos1=target_pos1,
             target_pos2=target_pos2,

@@ -1,11 +1,17 @@
-"""Cached environment backdrop; gameplay is always rendered separately."""
+"""Phông nền môi trường có cache; phần chơi luôn được vẽ riêng."""
 from functools import lru_cache
-from pathlib import Path
 import math
 import random
 import pygame
+from src.gui.theme import ASSETS_DIR, FONTS_DIR
 
-ASSET_DIR = Path(__file__).resolve().parents[2] / 'assets'
+
+def _cover(result, path):
+    image = pygame.image.load(str(path))
+    w, h = result.get_size()
+    scale = max(w / image.get_width(), h / image.get_height())
+    image = pygame.transform.smoothscale(image, (round(image.get_width() * scale), round(image.get_height() * scale)))
+    result.blit(image, ((w - image.get_width()) // 2, (h - image.get_height()) // 2))
 
 
 @lru_cache(maxsize=3)
@@ -13,15 +19,12 @@ def background(size, style='dream', cells=(), stage_index=0):
     if style == 'blueprint':
         return blueprint(size, cells, stage_index)
     if style == 'forest':
-        return forest_ruins(size, cells, stage_index)
-    new_asset = ASSET_DIR / 'wide_dreamy_fantasy_landscape_scene_pastel_pink.png'
-    asset = new_asset if new_asset.exists() else ASSET_DIR / 'dream_city_background.png'
+        return forest_ruins(size, stage_index)
+    new_asset = ASSETS_DIR / 'wide_dreamy_fantasy_landscape_scene_pastel_pink.png'
+    asset = new_asset if new_asset.exists() else ASSETS_DIR / 'dream_city_background.png'
     if asset.exists():
-        image = pygame.image.load(str(asset))
-        scale = max(size[0] / image.get_width(), size[1] / image.get_height())
-        image = pygame.transform.smoothscale(image, (round(image.get_width() * scale), round(image.get_height() * scale)))
         result = pygame.Surface(size)
-        result.blit(image, ((size[0] - image.get_width()) // 2, (size[1] - image.get_height()) // 2))
+        _cover(result, asset)
         return result
     result = pygame.Surface(size)
     for y in range(size[1]):
@@ -30,24 +33,21 @@ def background(size, style='dream', cells=(), stage_index=0):
     return result
 
 
-def forest_ruins(size, cells, stage_index):
-    """Ancient overgrown stone ruin backdrop with canopy god rays and relic floor plan tablet."""
+def forest_ruins(size, stage_index):
+    """Phông nền tàn tích đá phủ rêu với tia nắng xuyên tán lá và tấm bản vẽ mặt bằng."""
     w, h = size
     result = pygame.Surface(size)
-    asset = ASSET_DIR / 'forest_ruins_background.png'
+    asset = ASSETS_DIR / 'forest_ruins_background.png'
     if asset.exists():
-        image = pygame.image.load(str(asset))
-        scale = max(w / image.get_width(), h / image.get_height())
-        image = pygame.transform.smoothscale(image, (round(image.get_width() * scale), round(image.get_height() * scale)))
-        result.blit(image, ((w - image.get_width()) // 2, (h - image.get_height()) // 2))
+        _cover(result, asset)
     else:
-        # Deep emerald ancient ruin gradient
+        # Dải màu ngọc lục bảo đậm của tàn tích cổ
         for y in range(h):
             t = y / max(1, h - 1)
             col = (round(12 + 10 * t), round(26 + 18 * t), round(20 + 14 * t))
             pygame.draw.line(result, col, (0, y), (w, y))
 
-    # Volumetric atmospheric sunbeams / god rays through canopy
+    # Tia nắng thể tích xuyên qua tán lá
     rays = pygame.Surface(size, pygame.SRCALPHA)
     for i, (rx, rw, ang) in enumerate(((w * 0.18, 90, 0.45), (w * 0.46, 120, 0.38), (w * 0.74, 85, 0.42))):
         pts = [
@@ -60,7 +60,7 @@ def forest_ruins(size, cells, stage_index):
         pygame.draw.polygon(rays, (255, 245, 200, alpha), pts)
     result.blit(rays, (0, 0))
 
-    # Glowing mystical forest fireflies / pollen motes
+    # Đom đóm / phấn hoa phát sáng trong rừng
     motes = pygame.Surface(size, pygame.SRCALPHA)
     rng = random.Random(1337 + stage_index)
     for _ in range(48):
@@ -77,14 +77,14 @@ def forest_ruins(size, cells, stage_index):
 
 
 def blueprint(size, cells, stage_index):
-    """Paper grain, real isometric drafting grid, compass cube badge, and floor plan covering full screen."""
+    """Vân giấy, lưới vẽ kỹ thuật isometric thật, huy hiệu la bàn hình khối và mặt bằng phủ toàn màn hình."""
     w, h = size
     grain = pygame.Surface((256, 256))
     rng = random.Random(72)
     for y in range(256):
         for x in range(256):
             delta = rng.randrange(-4, 5)
-            # Deep matte navy paper `#0E1E2E` base
+            # Nền giấy xanh navy mờ `#0E1E2E`
             grain.set_at((x, y), (14 + delta, 30 + delta, 46 + delta))
     result = pygame.Surface(size)
     for y in range(0, h, 256):
@@ -95,7 +95,7 @@ def blueprint(size, cells, stage_index):
     boundary = w - 48
     guides.set_clip((0, 70, boundary, h - 80))
 
-    # Real technical isometric drafting lines (30-degree angles)
+    # Đường vẽ kỹ thuật isometric thật (góc 30 độ)
     cyan_line = (56, 178, 172, 38)
     for origin in range(-h * 2, w + h * 2, 96):
         for sign in (-1, 1):
@@ -109,22 +109,22 @@ def blueprint(size, cells, stage_index):
                                  (start[0] + (end[0] - start[0]) * b, start[1] + (end[1] - start[1]) * b))
     guides.set_clip(None)
 
-    # Drafting border marks and crosshairs
+    # Dấu viền bản vẽ và chữ thập ngắm
     cyan_bright = (152, 210, 224, 110)
     pygame.draw.line(guides, cyan_bright, (boundary, 70), (boundary, h - 50))
     for x, y in ((54, 120), (54, h - 140), (boundary, 70), (boundary, h - 50)):
         pygame.draw.line(guides, cyan_bright, (x - 12, y), (x + 12, y), 1)
         pygame.draw.line(guides, cyan_bright, (x, y - 12), (x, y + 12), 1)
 
-    # Upper right: Isometric Drafting Compass Badge (from Reference Image 1)
+    # Góc trên phải: huy hiệu la bàn vẽ kỹ thuật isometric (theo ảnh tham khảo 1)
     badge_cx, badge_cy = boundary - 120, 130
     if badge_cx > 380:
         badge_r = 30
         pygame.draw.circle(guides, (72, 140, 164, 130), (badge_cx, badge_cy), badge_r, 1)
-        # Crosshairs through circle
+        # Chữ thập xuyên qua vòng tròn
         pygame.draw.line(guides, (72, 140, 164, 90), (badge_cx - badge_r - 14, badge_cy), (badge_cx + badge_r + 14, badge_cy), 1)
         pygame.draw.line(guides, (72, 140, 164, 90), (badge_cx, badge_cy - badge_r - 14), (badge_cx, badge_cy + badge_r + 14), 1)
-        # Wireframe isometric cube inside
+        # Khối lập phương khung dây bên trong
         cr = 13
         p_center = (badge_cx, badge_cy)
         p_top = (badge_cx, badge_cy - cr)
@@ -135,17 +135,17 @@ def blueprint(size, cells, stage_index):
         p_tr = (badge_cx + dx, badge_cy - dy)
         p_bl = (badge_cx - dx, badge_cy + dy)
         p_br = (badge_cx + dx, badge_cy + dy)
-        # Outer hexagon
+        # Lục giác bên ngoài
         cube_color = (168, 222, 235, 180)
         pygame.draw.lines(guides, cube_color, True, [p_top, p_tr, p_br, p_bottom, p_bl, p_tl], 1)
-        # Inner Y
+        # Chữ Y bên trong
         pygame.draw.line(guides, cube_color, p_center, p_top, 1)
         pygame.draw.line(guides, cube_color, p_center, p_bl, 1)
         pygame.draw.line(guides, cube_color, p_center, p_br, 1)
 
     result.blit(guides, (0, 0))
 
-    font_path = Path(__file__).resolve().parents[2] / 'assets' / 'fonts' / 'SpaceGrotesk-Medium.ttf'
+    font_path = FONTS_DIR / 'SpaceGrotesk-Medium.ttf'
     font = pygame.font.Font(str(font_path) if font_path.exists() else pygame.font.match_font('segoeui'), 11)
 
     def label(value, lx, ly):

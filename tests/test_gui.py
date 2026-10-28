@@ -1,4 +1,4 @@
-﻿import os
+import os
 os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
 os.environ.setdefault('SDL_AUDIODRIVER', 'dummy')
 from pathlib import Path
@@ -8,7 +8,8 @@ import pytest
 from src.engine.loader import load_stage
 from src.engine.problem import BloxorzProblem, GameSession
 from src.engine.state import Action, GameState, Orientation
-from src.gui.app import BloxorzApp, initial_state
+from src.engine.loader import initial_state
+from src.gui.app import BloxorzApp
 from src.gui.contracts import MotionFrame, ReplayStatus, SolverRequest, SolverStatus, SolverResponse, SolverResultView
 from src.gui.renderer3d import state_meshes, motion_meshes, IsometricRenderer, cuboid, cuboid_samples, in_front, fall_meshes
 from src.gui.renderer3d import INTRO_DROP_START, INTRO_IMPACTS, INTRO_SECONDS, intro_drop
@@ -177,7 +178,7 @@ def test_champagne_lighting_and_uniform_short_edge_bevel():
     colors=[color for _,_,color,_ in renderer._faces(corners,(205,181,137),player=True)]
     values=[sum(color)/3 for color in colors]
     assert len(values)==3
-    assert values[0]==max(values)  # top is the first visible main face
+    assert values[0]==max(values)  # mặt đầu tiên là mặt chính đầu tiên nhìn thấy
     assert max(values)>min(values)*1.3
     assert all(color[0]/max(1,color[1])<1.4 for color in colors)
 
@@ -436,10 +437,10 @@ def test_redesign_modes_and_layout(size, large):
 def test_fall_animates_then_restarts_stage():
     app = app_fixture()
     start = app.session.current_state
-    assert app.apply_action(Action.UP) is False          # stage 01: rolls off the top edge
+    assert app.apply_action(Action.UP) is False          # stage 01: lăn ra khỏi mép trên
     assert app.session.status == 'LOST'
     assert app.animation.busy and app.animation.frame.falling
-    app.pending_action = Action.DOWN                    # key pressed while falling is dropped
+    app.pending_action = Action.DOWN                    # phím bấm trong lúc đang rơi bị bỏ qua
     app.update(app.FALL_SECONDS / 2)
     assert app.session.status == 'LOST'
     app.update(app.FALL_SECONDS)
@@ -464,12 +465,12 @@ def test_fall_frames_render_and_view_toggle(tmp_path):
             app.renderer.draw(surface, before, MotionFrame(before, fallen, Action.UP, progress, True))
         pygame.image.save(surface, str(tmp_path / f'fall_{view}.png'))
     app.command('view')
-    assert app.renderer.view == 'original'  # V toggles original <-> iso
+    assert app.renderer.view == 'original'  # V chuyển original <-> iso
     pygame.quit()
 
 
 def reachable_falls(stage, limit=60):
-    """(before, illegal pose, action) of falls from the first `limit` states."""
+    """(before, tư thế không hợp lệ, action) của các cú rơi từ `limit` state đầu tiên."""
     problem = BloxorzProblem(stage, initial_state(stage))
     seen = [initial_state(stage)]
     for state in seen:
@@ -484,13 +485,13 @@ def reachable_falls(stage, limit=60):
 
 
 def test_falling_block_never_goes_into_a_tile():
-    """Off an edge, down a hole or through a broken fragile tile: the block
-    tips over the edge and tumbles away, and no part of it enters a tile."""
+    """Rơi qua mép, xuống lỗ hoặc qua ô fragile vỡ: khối lật qua mép và lăn đi,
+    không phần nào lấn vào ô."""
     import collections
     paths = sorted((ROOT / 'levels').glob('stage_*.json'))
     renderer = IsometricRenderer()
     plans = collections.Counter()
-    for index in (0, 3, 32):  # plain edges, fragile tiles, a hole in the board
+    for index in (0, 3, 32):  # mép thường, ô fragile, một lỗ trên bàn
         renderer.set_stage(load_stage(str(paths[index])))
         for view in ('original', 'iso'):
             renderer.set_view(view)
@@ -511,10 +512,10 @@ def test_tiles_in_front_of_the_block_hide_it():
     for view in ('original', 'iso'):
         renderer.set_view(view)
         camera = renderer.camera
-        assert in_front(cuboid(2, 2, 0, 1, 1, 2), tile, camera)        # standing on it
-        assert not in_front(cuboid(2, 2, -3, 1, 1, 1), tile, camera)   # below it
-        assert in_front(cuboid(3, 2, -1, 1, 1, 1), tile, camera)       # past its near side
-        assert not in_front(cuboid(1, 2, -1, 1, 1, 1), tile, camera)   # past its far side
+        assert in_front(cuboid(2, 2, 0, 1, 1, 2), tile, camera)        # đứng trên nó
+        assert not in_front(cuboid(2, 2, -3, 1, 1, 1), tile, camera)   # bên dưới nó
+        assert in_front(cuboid(3, 2, -1, 1, 1, 1), tile, camera)       # vượt qua cạnh gần
+        assert not in_front(cuboid(1, 2, -1, 1, 1, 1), tile, camera)   # vượt qua cạnh xa
     renderer.set_view('original')
     surface = pygame.Surface((830, 630), pygame.SRCALPHA)
     mask = app.session.current_state.bridges_status
@@ -526,15 +527,15 @@ def test_tiles_in_front_of_the_block_hide_it():
         renderer.draw(surface, before, motion)
         return motion
 
-    # Off the far edge: the board hides the block, not even a tint shows through.
+    # Rơi qua mép xa: bàn che khối, không lộ ra chút màu nào.
     fall_frame((1, 1), Action.UP, .8)
     base = renderer._base
     for x in range(0, 830, 3):
         for y in range(0, 630, 3):
             if base.get_at((x, y)).a == 255:
                 assert surface.get_at((x, y)) == base.get_at((x, y)), (x, y)
-    # Off the near edge (toward the viewer): the block is in front of the tiles
-    # it fell from (row 4), also where it is below the board top.
+    # Rơi qua mép gần (về phía người xem): khối nằm trước các ô
+    # mà nó rơi khỏi (hàng 4), kể cả khi nó đã ở dưới mặt bàn.
     def opaque(sprites, x, y, alpha=255):
         return any(spr.get_rect(topleft=xy).collidepoint(x, y) and spr.get_at((x - xy[0], y - xy[1])).a >= alpha
                    for spr, xy in sprites)
@@ -546,7 +547,7 @@ def test_tiles_in_front_of_the_block_hide_it():
         tip = renderer._tip(motion.after, motion.action)
         corners = fall_meshes(motion, tip, renderer._fall_plan(motion, tip))[0][0]
         centre = [sum(p[i] for p in corners) / 8 for i in range(3)]
-        inner = [tuple(m + (v - m) * .8 for v, m in zip(p, centre)) for p in corners]  # off the outline
+        inner = [tuple(m + (v - m) * .8 for v, m in zip(p, centre)) for p in corners]  # lệch khỏi đường viền
         for point in cuboid_samples(inner, 8):
             x, y = (round(v) for v in renderer.project(point))
             if point[2] < 0 and opaque(edge, x, y) and not opaque(others, x, y, alpha=1):
@@ -576,7 +577,7 @@ def test_manual_win_sinks_then_offers_next_stage():
         app.update(.02)
         if app.win_phase == 'choice':
             break
-    # Waits for the player instead of loading the next stage by itself.
+    # Chờ người chơi thay vì tự load màn tiếp theo.
     assert app.win_phase == 'choice' and app.stage_index == 0 and app.session.status == 'WON'
     app.undo()
     assert app.session.status == 'WON'
@@ -622,7 +623,7 @@ def test_sound_events_follow_gameplay():
         def play(self, name='roll', volume=1.0): self.log.append(name)
     app = app_fixture()
     app.sound, app.sound_enabled, app.animate = Recorder(), True, False
-    assert app.apply_action(Action.UP) is False          # stage 01: falls off the top edge
+    assert app.apply_action(Action.UP) is False          # stage 01: rơi khỏi mép trên
     assert app.sound.log == ['fall']
     app.update(.01)
     for action in solution(app):
@@ -631,17 +632,17 @@ def test_sound_events_follow_gameplay():
 
 
 def test_stage_intro_block_drops_and_bounces():
-    """The block falls under gravity, bounces lower each time and comes to
-    rest; each bounce thuds more softly, and every intro frame draws."""
-    assert intro_drop(INTRO_DROP_START - .01) is None  # not released yet
+    """Khối rơi theo trọng lực, mỗi lần nảy thấp hơn rồi nằm yên; mỗi lần nảy
+    tiếng thịch nhỏ hơn, và mọi frame của intro đều được vẽ."""
+    assert intro_drop(INTRO_DROP_START - .01) is None  # chưa được thả
     steps = [i / 480 for i in range(round(INTRO_DROP_START * 480), round(INTRO_SECONDS * 480) + 1)]
     heights = [intro_drop(t)[0] for t in steps]
     assert heights[0] > 5 and heights[-1] == 0.0 and intro_drop(INTRO_SECONDS) == (0.0, 0.0)
     peaks = [b for a, b, c in zip(heights, heights[1:], heights[2:]) if a < b >= c and b > .01]
     assert len(peaks) >= 2 and .5 < peaks[0] < 1.5 and peaks == sorted(peaks, reverse=True)
     first_hit = INTRO_IMPACTS[0][0]
-    assert intro_drop(first_hit + .03)[1] > .05  # squashed for a moment on impact
-    assert all(height == 0.0 for height in heights[-10:])  # at rest before the intro ends
+    assert intro_drop(first_hit + .03)[1] > .05  # bị ép dẹt trong chốc lát khi va chạm
+    assert all(height == 0.0 for height in heights[-10:])  # nằm yên trước khi intro kết thúc
 
     class Recorder:
         def __init__(self): self.log = []
@@ -665,18 +666,18 @@ def test_stage_intro_block_drops_and_bounces():
 def test_fragile_tile_breaks_when_block_stands_on_it():
     pygame.init()
     app = app_fixture()
-    app.select_stage(3)  # stage 04 has fragile tiles
+    app.select_stage(3)  # stage 04 có ô fragile
     before = GameState((5, 7), (5, 8), Orientation.LYING_H, 0, ())
     fallen = app.session.problem.fall_result(before, Action.RIGHT)
     assert fallen.orientation == Orientation.STANDING and fallen.pos1 == (5, 9)
     renderer = app.renderer
     assert renderer._broken_tile(fallen) == (5, 9)
-    assert renderer._broken_tile(before) is None  # lying blocks never break tiles
+    assert renderer._broken_tile(before) is None  # khối nằm không bao giờ làm vỡ ô
     surface = pygame.Surface((760, 600))
     renderer.draw(surface, before, MotionFrame(before, fallen, Action.RIGHT, .1, True))
-    assert renderer._static_key[-1] is None  # still rolling onto the tile
+    assert renderer._static_key[-1] is None  # vẫn đang lăn lên ô
     renderer.draw(surface, before, MotionFrame(before, fallen, Action.RIGHT, .6, True))
-    assert renderer._static_key[-1] == (5, 9)  # the board is rebuilt without it
+    assert renderer._static_key[-1] == (5, 9)  # bàn được dựng lại không có ô đó
     pygame.quit()
 
 
@@ -684,7 +685,7 @@ def test_switch_press_rolls_at_normal_speed_then_bridge_flies():
     import collections
     pygame.init()
     app = app_fixture()
-    app.select_stage(1)  # stage 02: a soft switch opens a bridge
+    app.select_stage(1)  # stage 02: một công tắc mềm mở cầu
     problem, start = app.session.problem, app.session.current_state
     previous, queue, goal = {start: None}, collections.deque([start]), None
     while queue and goal is None:
@@ -707,18 +708,18 @@ def test_switch_press_rolls_at_normal_speed_then_bridge_flies():
         while app.animation.busy:
             app.update(.01)
     assert app.apply_action(path[-1])
-    # The roll that presses the switch is as fast as any other roll.
+    # Lần lăn bấm công tắc nhanh như mọi lần lăn khác.
     assert abs(app.animation.duration_sec - app.ROLL_SECONDS) < 1e-9
-    assert app.bridge_fx is None  # the bridge waits for the block to land...
+    assert app.bridge_fx is None  # cầu chờ khối tiếp đất...
     queued = app.bridge_view()
-    assert queued is not None and queued[2] == 0.0  # ...and is shown at its starting pose
+    assert queued is not None and queued[2] == 0.0  # ...và được hiển thị ở tư thế ban đầu
     changed = [i for i, (a, b) in enumerate(zip(queued[0], queued[1])) if a != b]
     bridge_cells = {cell for cell, i in app.renderer.bridge_cells.items() if i in changed}
     surface = pygame.Surface((830, 630), pygame.SRCALPHA)
-    app.update(app.ROLL_SECONDS * .8)  # past the point where the board used to switch over
+    app.update(app.ROLL_SECONDS * .8)  # qua thời điểm mà trước đây bàn bị đổi
     app.renderer.draw(surface, app.session.current_state, app.animation.frame, bridges=app.bridge_view())
     on_board = {cell for _, _, _, cell, *_ in app.renderer._tile_sprites}
-    assert bridge_cells and not bridge_cells & on_board  # no early pop-in of the new bridge
+    assert bridge_cells and not bridge_cells & on_board  # cầu mới không bật ra sớm
     rolled = app.ROLL_SECONDS * .8
     while app.animation.busy:
         app.update(.01)
@@ -733,18 +734,18 @@ def test_switch_press_rolls_at_normal_speed_then_bridge_flies():
         app.update(.02)
         flown += .02
     assert abs(flown - app.BRIDGE_SECONDS) < .05
-    # The block can move again right away; the bridge never blocks input.
+    # Khối có thể di chuyển tiếp ngay; cầu không bao giờ chặn input.
     app.undo()
     assert app.bridge_fx is None and app.session.current_state.bridges_status == old
     pygame.quit()
 
 
 def test_win_sequence_draws_every_frame_and_board_stays_gone():
-    """Draw the whole win sequence (sink, falling tiles, dialog) like the game
-    does, on a 1x screen and through the Retina present() path."""
+    """Vẽ toàn bộ chuỗi thắng (chìm, ô rơi, hộp thoại) như trong game, trên
+    màn 1x và qua đường present() của Retina."""
     pygame.init()
 
-    class RetinaWindow:  # a 2x window surface, like a MacBook screen
+    class RetinaWindow:  # surface cửa sổ gấp đôi, như màn hình MacBook
         def __init__(self, size):
             self.size, self.surface = size, pygame.Surface((size[0] * 2, size[1] * 2))
 
@@ -769,11 +770,11 @@ def test_win_sequence_draws_every_frame_and_board_stays_gone():
             if app.win_phase == 'choice':
                 break
         assert {'sink', 'disassemble', 'choice'} <= set(phases)
-        # The block sank and the tiles fell away: nothing comes back up.
+        # Khối đã chìm và các ô đã rơi đi: không có gì hiện lại.
         assert app.board_outro() == 1.0
         frame = pygame.Surface((830, 630), pygame.SRCALPHA)
         app.renderer.draw(frame, app.session.current_state, None, outro_t=app.board_outro())
-        assert frame.get_bounding_rect().width == 0  # an empty board
+        assert frame.get_bounding_rect().width == 0  # bàn trống
         app.command('next_stage')
         assert app.board_outro() is None and app.stage_index == 1
     pygame.quit()
@@ -781,13 +782,13 @@ def test_win_sequence_draws_every_frame_and_board_stays_gone():
 
 def test_frame_pacer_targets_even_60_fps():
     from src.gui.app import FramePacer
-    # 60 FPS on 60/120/240 Hz screens (every frame shows for the same number of
-    # refreshes); 72 FPS on 144 Hz.
+    # 60 FPS trên màn 60/120/240 Hz (mọi frame hiển thị cùng số lần
+    # làm tươi); 72 FPS trên 144 Hz.
     assert abs(FramePacer(60).frame_s - 1 / 60) < 1e-9
     assert abs(FramePacer(120).frame_s - 1 / 60) < 1e-9
     assert abs(FramePacer(240).frame_s - 1 / 60) < 1e-9
     assert abs(FramePacer(144).frame_s - 1 / 72) < 1e-9
-    assert abs(FramePacer(0).frame_s - 1 / 60) < 1e-9  # unknown rate
+    assert abs(FramePacer(0).frame_s - 1 / 60) < 1e-9  # không biết tần số
 
     class Window:
         flips = 0
@@ -797,19 +798,19 @@ def test_frame_pacer_targets_even_60_fps():
 
     pacer, window = FramePacer(120), Window()
     pacer.wait_and_flip(window, drew=True)
-    pacer.wait_and_flip(window, drew=False)  # nothing new: wait, but do not flip
+    pacer.wait_and_flip(window, drew=False)  # không có gì mới: chờ, nhưng không flip
     assert window.flips == 1
 
 
 def test_switch_boards_are_ready_before_the_press():
-    """Pressing a switch must not compose a board on the spot (that was a hitch):
-    boards for bridge layouts a move or two away are composed while idle."""
+    """Bấm công tắc không được dựng bàn ngay lúc đó (từng gây khựng): bàn cho các
+    bố cục cầu cách một hai nước được dựng sẵn khi rảnh."""
     import collections
     from src.gui.renderer3d import _Bridges
     pygame.init()
     app = app_fixture()
     app.screen = pygame.Surface((1180, 742))
-    app.select_stage(4)  # stage 05: its first switch closes an open bridge
+    app.select_stage(4)  # stage 05: công tắc đầu tiên đóng một cầu đang mở
     problem, start = app.session.problem, app.session.current_state
     previous, queue, goal = {start: None}, collections.deque([start]), None
     while queue and goal is None:
@@ -832,7 +833,7 @@ def test_switch_boards_are_ready_before_the_press():
         while app.animation.busy:
             app.update(1 / 60)
             app.draw()
-    for _ in range(60):  # a second of standing next to the switch
+    for _ in range(60):  # một giây đứng cạnh công tắc
         app.update(1 / 60)
         app.draw()
     before = app.session.current_state.bridges_status
@@ -846,6 +847,6 @@ def test_switch_boards_are_ready_before_the_press():
     renderer._compose_board = lambda *args: (composed.append(args), original(*args))[1]
     assert app.apply_action(path[-1])
     app.update(1 / 60)
-    app.draw()  # the frame the switch is pressed
+    app.draw()  # frame công tắc được bấm
     assert not composed
     pygame.quit()

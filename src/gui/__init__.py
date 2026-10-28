@@ -1,1 +1,1 @@
-"""Presentation layer package."""
+"""Package lớp giao diện."""

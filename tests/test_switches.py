@@ -1,8 +1,7 @@
 from types import SimpleNamespace
 
 from src.engine.loader import StageData
-from src.engine.switches import apply_tile_effects
-from src.engine.switches import SwitchType
+from src.engine.switches import SwitchType, apply_tile_effects
 
 
 def _switch(switch_type, **kwargs):
@@ -28,7 +27,7 @@ def test_heavy_switch_requires_standing():
     assert new_bridges[1] == True   # Cầu 1 của nút Tròn mở
     
     # 2. Khối ĐỨNG đè lên nút X ở (0,0)
-    # Standing blocks use the existing two-position representation (same cell twice).
+    # Khối đứng dùng dạng biểu diễn hai vị trí hiện có (cùng một ô hai lần).
     blocks_standing = ((0, 0), (0, 0))
     _, _, new_bridges_standing = apply_tile_effects(blocks_standing, False, initial_bridges, stage)
     

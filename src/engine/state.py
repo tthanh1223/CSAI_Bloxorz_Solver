@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from typing import Tuple
 from enum import Enum
+from typing import Optional, Tuple
 
 Coord = Tuple[int, int]
 
@@ -16,32 +16,29 @@ class Action(Enum):
     LEFT = 'LEFT'
     RIGHT = 'RIGHT'
     SPACE = 'SPACE'
-  
+
 @dataclass(frozen=True)
 class GameState:
-    """Hashable state representation used by visited sets and solver queues."""
-    pos1: Coord #tọa dộ ô 2
-    pos2: Coord #tọa độ ô 2
-    ## nếu khối đứng thì pos1 = pos2
-    orientation: Orientation # trạng thái của block 
-    active_cube: int # tách làm hai khối thì 0 (pos1) và 1 (pos2) = có ý nghĩa khi orientation == SPLIT
-    bridges_status: Tuple[bool, ...] # Trạng thái đóng mơ cửa cầu (trạng thái)
-    #Phương thức: Ghi đè __hash__ và __eq__ để Python biết cách so sánh 2 trạng thái.
-
-State = GameState
+    """Trạng thái bất biến, hash được, dùng cho tập visited và hàng đợi của solver."""
+    pos1: Coord  # toạ độ ô 1
+    pos2: Coord  # toạ độ ô 2; khi khối đứng thì pos1 == pos2
+    orientation: Orientation  # tư thế của khối
+    active_cube: int  # khi tách làm hai: 0 là khối ở pos1, 1 là khối ở pos2; chỉ có ý nghĩa khi orientation == SPLIT
+    bridges_status: Tuple[bool, ...]  # trạng thái đóng/mở của từng cầu
+    # frozen=True nên dataclass tự sinh __hash__ và __eq__ để so sánh hai trạng thái.
 
 @dataclass(frozen=True)
 class SearchNode:
-    """nút trên cây tìm kiếm phục vụ cho các thuật toán search"""
-    state: GameState #trạng thái của node 
-    parent: 'SearchNode' #Trỏ về chính nó (cần vì lấy chuỗi khi thắng)
-    action: Action # hành động tạo ra nút này
-    g: int # Chi phí thích lũy từ điểm xuất phát
-    h: float = 0.0 # hàm heuristic (cài đặt)
+    """Nút trên cây tìm kiếm, dùng cho các thuật toán search."""
+    state: GameState  # trạng thái của nút
+    parent: Optional['SearchNode']  # nút cha, dùng để lần ngược ra đường đi khi tới đích
+    action: Optional[Action]  # hành động tạo ra nút này
+    g: float  # chi phí tích luỹ từ điểm xuất phát
+    h: float = 0.0  # giá trị heuristic
     @property
     def f(self) -> float:
         return self.g + self.h
 
-    # override phép so sánh á anh em
+    # so sánh theo f để nút có thể đưa vào heap
     def __lt__(self, other: 'SearchNode') -> bool:
-        return self.f < other.f 
+        return self.f < other.f

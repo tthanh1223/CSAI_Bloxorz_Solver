@@ -1,1 +1,1 @@
-"""Game engine package."""
+"""Package engine của game."""

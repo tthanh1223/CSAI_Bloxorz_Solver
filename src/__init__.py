@@ -1,1 +1,1 @@
-"""Bloxorz project source package."""
+"""Package mã nguồn của project Bloxorz."""

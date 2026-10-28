@@ -1,4 +1,4 @@
-"""Playback cursor; game rules and timing belong to the app."""
+"""Con trỏ phát lại; luật chơi và nhịp thời gian thuộc về app."""
 from collections.abc import Sequence
 from src.engine.state import Action, GameState
 from src.gui.contracts import ReplayStatus

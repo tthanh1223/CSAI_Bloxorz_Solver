@@ -1,9 +1,8 @@
-"""Shared visual tokens: muted architecture, one amber accent, 8px spacing."""
+"""Token giao diện dùng chung: kiến trúc tông trầm, một màu nhấn hổ phách, khoảng cách 8px."""
 from functools import lru_cache
 from pathlib import Path
 import pygame
 
-SPACE = 8
 BUTTON_HEIGHT = 40
 PANEL_WIDTH = 296
 MIN_SIZE = (900, 560)
@@ -22,7 +21,8 @@ INK = (255, 251, 240)
 FLOOR = (218, 226, 213)
 BLOCK = (242, 177, 132)
 
-FONTS_DIR = Path(__file__).resolve().parents[2] / 'assets' / 'fonts'
+ASSETS_DIR = Path(__file__).resolve().parents[2] / 'assets'
+FONTS_DIR = ASSETS_DIR / 'fonts'
 
 
 @lru_cache(maxsize=16)
@@ -37,7 +37,7 @@ def _font(level='body', large=False):
     }
     size = sizes.get(level, 16) + (2 if large else 0)
 
-    # 1. Try modern geometric & tabular font assets
+    # 1. Thử các font hình học và font số đều trong assets
     font_file = None
     if level == 'display':
         cand = FONTS_DIR / 'Outfit-Bold.ttf'
@@ -70,7 +70,7 @@ def _font(level='body', large=False):
         except Exception:
             pass
 
-    # 2. Graceful OS fallbacks
+    # 2. Font dự phòng của hệ điều hành
     regular = Path('C:/Windows/Fonts/segoeui.ttf')
     path = str(regular) if regular.exists() else pygame.font.match_font('dejavusans,arial')
     return pygame.font.Font(path, size)

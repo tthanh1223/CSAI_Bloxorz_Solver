@@ -26,9 +26,9 @@ def test_is_goal_lose_conditions():
 
 def _stage_01():
     from pathlib import Path
-    from src.engine.loader import load_stage
+    from src.engine.loader import initial_state, load_stage
     stage = load_stage(str(Path(__file__).resolve().parents[1] / 'levels' / 'stage_01.json'))
-    return stage, GameState(stage.start, stage.start, Orientation.STANDING, 0, stage.initial_bridge_mask)
+    return stage, initial_state(stage)
 
 
 def test_fall_result_only_for_rejected_rolls():
@@ -50,7 +50,7 @@ def test_session_fall_sets_lost_and_keeps_state():
     from src.engine.state import Action
     stage, start = _stage_01()
     session = GameSession(BloxorzProblem(stage, start))
-    assert session.fall(Action.UP) is not None      # stage 01 start is on the top edge
+    assert session.fall(Action.UP) is not None      # vị trí xuất phát của stage 01 nằm ở mép trên
     assert session.status == 'LOST'
     assert session.current_state == start
     assert session.apply_action(Action.RIGHT) is False
@@ -59,8 +59,8 @@ def test_session_fall_sets_lost_and_keeps_state():
 
 
 def test_parked_split_cube_does_not_retrigger_soft_switch():
-    """Stage 02 has a soft toggle switch at (2, 2). A split cube resting on it
-    must not toggle the bridge again every time the other cube moves."""
+    """Stage 02 có một công tắc mềm kiểu bật/tắt ở (2, 2). Một khối nhỏ đang đứng
+    trên đó không được bật/tắt cầu lại mỗi lần khối kia di chuyển."""
     from pathlib import Path
     from src.engine.loader import load_stage
     from src.engine.state import Action
@@ -70,7 +70,7 @@ def test_parked_split_cube_does_not_retrigger_soft_switch():
     for action, after, _ in problem.get_successors(parked):
         if action != Action.SPACE and after.orientation == Orientation.SPLIT:
             assert after.bridges_status == parked.bridges_status
-    # Moving a cube ONTO the switch still toggles it.
+    # Đưa một khối nhỏ LÊN công tắc thì vẫn bật/tắt nó.
     arriving = GameState((2, 3), (0, 6), Orientation.SPLIT, 0, stage.initial_bridge_mask)
     moved = {a: s for a, s, _ in problem.get_successors(arriving)}[Action.LEFT]
     assert moved.pos1 == (2, 2) and moved.bridges_status != arriving.bridges_status

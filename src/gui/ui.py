@@ -1,28 +1,35 @@
-"""Commercial-grade vector UI primitives and tactile micro-interactions."""
+"""Các thành phần UI vector và hiệu ứng tương tác nhỏ."""
 from dataclasses import dataclass
 import math
 import pygame
-from src.gui.theme import BG, PANEL, TEXT, MUTED, ACCENT
 from src.gui import theme
 
 
-def text(surface, font, value, pos, color=TEXT, max_width=None):
-    """Render anti-aliased text with optional ellipsis truncation."""
+def _truncate(font, value, max_width):
+    while value and font.size(value + '…')[0] > max_width:
+        value = value[:-1]
+    return value
+
+
+def _draw_chevron(surface, color, x, y):
+    pygame.draw.lines(surface, color, False, [(x - 4, y - 2), (x, y + 2), (x + 4, y - 2)], 1)
+
+
+def text(surface, font, value, pos, color=theme.TEXT, max_width=None):
+    """Vẽ chữ khử răng cưa, có thể cắt bớt và thêm dấu ba chấm."""
     value = str(value)
     if max_width is not None and font.size(value)[0] > max_width:
-        while value and font.size(value + '…')[0] > max_width:
-            value = value[:-1]
-        value += '…'
+        value = _truncate(font, value, max_width) + '…'
     surface.blit(font.render(value, True, color), pos)
 
 
 def draw_vector_icon(surface, name, center, color, size=16):
-    """Draw crisp mathematical procedural vector icons."""
+    """Vẽ icon vector sắc nét bằng hình học."""
     cx, cy = center
     hs = size / 2
 
     if name in ('undo', 'rewind'):
-        # Crisp modern undo arrow: pointing left, rounded curve sweeping down-right
+        # Mũi tên undo: chỉ sang trái, đường cong bo xuống phải
         tip_x, tip_y = cx - 5, cy - 2
         pygame.draw.polygon(surface, color, [
             (tip_x, tip_y),
@@ -41,7 +48,7 @@ def draw_vector_icon(surface, name, center, color, size=16):
         pygame.draw.line(surface, color, (cx + 1 + round(r), tip_y + round(r)), (cx + 1 + round(r), cy + 4), 2)
 
     elif name in ('restart', 'refresh'):
-        # Clockwise 3/4 circle refresh arrow
+        # Mũi tên làm mới 3/4 vòng theo chiều kim đồng hồ
         r = hs * 0.82
         arc_rect = pygame.Rect(cx - r, cy - r, 2 * r, 2 * r)
         pygame.draw.arc(surface, color, arc_rect, -math.pi * 0.45, math.pi * 1.15, 2)
@@ -54,13 +61,13 @@ def draw_vector_icon(surface, name, center, color, size=16):
         ])
 
     elif name in ('hint', 'bulb'):
-        # Elegant vector lightbulb with glow
+        # Bóng đèn vector có quầng sáng
         r = hs * 0.62
         pygame.draw.circle(surface, color, (round(cx), round(cy - 2)), round(r), 2)
         base_y = cy + r - 1
         pygame.draw.line(surface, color, (cx - 3, base_y), (cx + 3, base_y), 2)
         pygame.draw.line(surface, color, (cx - 2, base_y + 3), (cx + 2, base_y + 3), 2)
-        # Inner filament dot
+        # Chấm dây tóc bên trong
         pygame.draw.circle(surface, color, (round(cx), round(cy - 2)), 1)
 
     elif name == 'play':
@@ -81,13 +88,13 @@ def draw_vector_icon(surface, name, center, color, size=16):
         pygame.draw.rect(surface, color, r2, border_radius=2)
 
     elif name in ('step', 'next'):
-        # Right chevron with bar
+        # Chevron phải kèm vạch
         pts = [(cx - 3, cy - hs * 0.7), (cx + 3, cy), (cx - 3, cy + hs * 0.7)]
         pygame.draw.lines(surface, color, False, pts, 2)
         pygame.draw.line(surface, color, (cx + 6, cy - hs * 0.7), (cx + 6, cy + hs * 0.7), 2)
 
     elif name == 'back':
-        # Left chevron with bar
+        # Chevron trái kèm vạch
         pts = [(cx + 3, cy - hs * 0.7), (cx - 3, cy), (cx + 3, cy + hs * 0.7)]
         pygame.draw.lines(surface, color, False, pts, 2)
         pygame.draw.line(surface, color, (cx - 6, cy - hs * 0.7), (cx - 6, cy + hs * 0.7), 2)
@@ -165,7 +172,7 @@ _GLASS_PANEL_CACHE = {}
 
 
 def draw_glass_panel(surface, rect, style='dream', border_radius=24, shadow=True, fill_alpha=None, specular=True):
-    """Render procedural Frosted Glassmorphism card with ambient shadow, translucent tint, and specular rim."""
+    """Vẽ thẻ kính mờ (glassmorphism) với bóng mờ, lớp màu bán trong suốt và viền phản chiếu."""
     w, h = rect.size
     if w <= 8 or h <= 8:
         return
@@ -187,7 +194,7 @@ def draw_glass_panel(surface, rect, style='dream', border_radius=24, shadow=True
             rim_bright = (255, 255, 255, 220)
             rim_soft = (255, 255, 255, 120)
             inner_glow = (255, 235, 245, 50)
-        elif style in ('forest', 'forest_gl'):
+        elif style == 'forest':
             base_col = (18, 32, 25, fill_alpha if fill_alpha is not None else 165)
             rim_bright = (210, 248, 228, 195)
             rim_soft = (110, 160, 130, 120)
@@ -224,7 +231,7 @@ def draw_glass_panel(surface, rect, style='dream', border_radius=24, shadow=True
 
 
 def draw_bento_card(surface, rect, label, value, unit="", style='dream', font_lbl=None, font_val=None, font_unit=None):
-    """Render a 2x2 Bento Metric Card with solid frosted glass styling, hover glow, and centered typography."""
+    """Vẽ thẻ số liệu Bento 2x2 kiểu kính mờ đặc, phát sáng khi hover và chữ căn giữa."""
     mouse_pos = pygame.mouse.get_pos()
     is_hover = rect.collidepoint(mouse_pos)
     draw_r = rect
@@ -279,8 +286,58 @@ class Button:
         mouse_pos = pygame.mouse.get_pos()
         hover = self.enabled and self.rect.collidepoint(mouse_pos)
         pressed = hover and pygame.mouse.get_pressed()[0]
+        h_t, p_t, rip_t = self._animate(hover, pressed)
 
-        # Smooth interactive animation tracking (60fps ease)
+        # Dịch chuyển vật lý: nhấc lên mượt khi hover, ấn xuống khi click
+        # Lơ lửng và lắc nhẹ khi hover
+        ticks = pygame.time.get_ticks()
+        float_y = math.sin(ticks * 0.0065 + self.rect.x * 0.04) * 2.2
+        sway_x = math.sin(ticks * 0.0035 + self.rect.y * 0.04) * 1.2
+
+        dy = -round(h_t * 3.0 + float_y * h_t) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
+        dx = round(sway_x * h_t) if h_t > 0 else 0
+        draw_rect = self.rect.move(dx, dy)
+        radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
+
+        # Quầng sáng dưới nút khi hover
+        if self.enabled and h_t > 0.05:
+            glow_surf = pygame.Surface((draw_rect.width + 16, draw_rect.height + 16), pygame.SRCALPHA)
+            glow_alpha = int(42 * h_t) if self.kind == 'primary' else int(25 * h_t)
+            glow_col = (*theme.ACCENT[:3], glow_alpha)
+            pygame.draw.rect(glow_surf, glow_col, glow_surf.get_rect(), border_radius=radius + 6)
+            surface.blit(glow_surf, (draw_rect.x - 8, draw_rect.y - 8 + 2))
+
+        # Bóng đổ mềm khi nút được nhấc lên / đang bật
+        if self.enabled and self.kind != 'quiet':
+            shadow_offset = round(2.5 + h_t * 4.0 - p_t * 2.0)
+            shadow_rect = self.rect.move(dx, shadow_offset)
+            shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(shadow_surf, (0, 0, 0, int(22 + 55 * h_t)), shadow_surf.get_rect(), border_radius=radius)
+            surface.blit(shadow_surf, shadow_rect)
+
+        color, foreground = self._colors(h_t, p_t)
+        if color:
+            self._draw_background(surface, draw_rect, radius, color, h_t)
+
+        # Gợn sóng khi click
+        if rip_t > 0.02 and self.enabled:
+            rip_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            rip_r = max(4, int(draw_rect.width * 0.85 * rip_t))
+            rip_alpha = int(75 * (1.0 - rip_t))
+            rip_pos = (mouse_pos[0] - draw_rect.x, mouse_pos[1] - draw_rect.y)
+            pygame.draw.circle(rip_surf, (255, 255, 255, rip_alpha), rip_pos, rip_r)
+            rip_mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(rip_mask, (255, 255, 255, 255), rip_mask.get_rect(), border_radius=radius)
+            rip_surf.blit(rip_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            surface.blit(rip_surf, draw_rect)
+
+        if self.selected and self.kind != 'dock_item':
+            pygame.draw.rect(surface, theme.ACCENT, draw_rect, 1, border_radius=12)
+
+        self._draw_content(surface, font, draw_rect, foreground, h_t)
+
+    def _animate(self, hover, pressed):
+        # Theo dõi animation tương tác mượt (ease 60fps)
         btn_id = f"{self.key}_{self.kind}"
         anim = _BUTTON_ANIM.setdefault(btn_id, {'hover': 0.0, 'press': 0.0, 'ripple': 0.0})
         anim['hover'] += ((1.0 if hover else 0.0) - anim['hover']) * 0.35
@@ -293,47 +350,16 @@ class Button:
             anim['hover'] = 0.0
         if not pressed and anim['press'] < 0.002:
             anim['press'] = 0.0
-        h_t = anim['hover']
-        p_t = anim['press']
-        rip_t = anim['ripple']
+        return anim['hover'], anim['press'], anim['ripple']
 
-        # Physical translation: lift up smoothly on hover, depress down on click
-        # Dynamic floating & swaying micro-animation on hover
-        ticks = pygame.time.get_ticks()
-        float_y = math.sin(ticks * 0.0065 + self.rect.x * 0.04) * 2.2
-        sway_x = math.sin(ticks * 0.0035 + self.rect.y * 0.04) * 1.2
-
-        dy = -round(h_t * 3.0 + float_y * h_t) + round(p_t * 3.5) if (h_t > 0 or p_t > 0) else 0
-        dx = round(sway_x * h_t) if h_t > 0 else 0
-        draw_rect = self.rect.move(dx, dy)
-        radius = draw_rect.height // 2 if self.kind in ('pill', 'dock_item') else 12
-
-        # Luminous ambient aura glow beneath button on hover
-        if self.enabled and h_t > 0.05:
-            glow_surf = pygame.Surface((draw_rect.width + 16, draw_rect.height + 16), pygame.SRCALPHA)
-            glow_alpha = int(42 * h_t) if self.kind == 'primary' else int(25 * h_t)
-            glow_col = (*theme.ACCENT[:3], glow_alpha)
-            pygame.draw.rect(glow_surf, glow_col, glow_surf.get_rect(), border_radius=radius + 6)
-            surface.blit(glow_surf, (draw_rect.x - 8, draw_rect.y - 8 + 2))
-
-        # Soft dynamic drop shadow when lifted / enabled
-        if self.enabled and self.kind != 'quiet':
-            shadow_offset = round(2.5 + h_t * 4.0 - p_t * 2.0)
-            shadow_rect = self.rect.move(dx, shadow_offset)
-            shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
-            pygame.draw.rect(shadow_surf, (0, 0, 0, int(22 + 55 * h_t)), shadow_surf.get_rect(), border_radius=radius)
-            surface.blit(shadow_surf, shadow_rect)
-
-        # Smooth color transitions
+    def _colors(self, h_t, p_t):
+        # Chuyển màu mượt
         if h_t == 0.0 and p_t == 0.0:
             if self.kind == 'primary':
                 color = theme.ACCENT if self.enabled else theme.SURFACE
                 foreground = theme.INK if self.enabled else theme.DISABLED
             elif self.kind == 'quiet':
                 color = None
-                foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
-            elif self.kind == 'dock_item':
-                color = tuple((*theme.SURFACE, 200)) if len(theme.SURFACE) == 4 else theme.SURFACE
                 foreground = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
             else:
                 color = theme.SURFACE
@@ -348,7 +374,7 @@ class Button:
                     color = theme.SURFACE
                 foreground = theme.INK if self.enabled else theme.DISABLED
             elif self.kind == 'dock_item':
-                base_col = tuple((*theme.SURFACE, 200)) if len(theme.SURFACE) == 4 else theme.SURFACE
+                base_col = theme.SURFACE
                 hover_col = tuple(min(255, c + 22) for c in theme.HOVER)
                 press_col = tuple(min(255, c + 15) for c in theme.PRESSED)
                 color = lerp_color(base_col, hover_col, h_t)
@@ -372,56 +398,43 @@ class Button:
                 base_fg = theme.ACCENT if self.selected else (theme.TEXT if self.enabled else theme.DISABLED)
                 bright_fg = theme.ACCENT if self.selected else (tuple(min(255, c + 40) for c in theme.TEXT) if self.enabled else theme.DISABLED)
                 foreground = lerp_color(base_fg, bright_fg, h_t)
+        return color, foreground
 
-        # Draw tactile background
-        if color:
-            if len(color) == 4 and color[3] < 255 and not (surface.get_flags() & pygame.SRCALPHA):
-                col_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-                pygame.draw.rect(col_surf, color, col_surf.get_rect(), border_radius=radius)
-                surface.blit(col_surf, draw_rect)
-            else:
-                pygame.draw.rect(surface, color, draw_rect, border_radius=radius)
+    def _draw_background(self, surface, draw_rect, radius, color, h_t):
+        # Vẽ nền nút
+        if len(color) == 4 and color[3] < 255 and not (surface.get_flags() & pygame.SRCALPHA):
+            col_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(col_surf, color, col_surf.get_rect(), border_radius=radius)
+            surface.blit(col_surf, draw_rect)
+        else:
+            pygame.draw.rect(surface, color, draw_rect, border_radius=radius)
 
-            if self.kind == 'primary' and self.enabled:
-                # Polished glass top shine highlight
-                gradient = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-                for row in range(max(1, draw_rect.height // 2)):
-                    alpha = int((45 + 35 * h_t) * (1.0 - row / (draw_rect.height / 2)))
-                    pygame.draw.line(gradient, (255, 255, 255, alpha), (0, row), (draw_rect.width, row))
-                mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-                pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
-                gradient.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-                surface.blit(gradient, draw_rect)
-            elif self.kind != 'quiet':
-                if self.enabled and h_t > 0.01:
-                    # Luminous top-edge glass sheen on hover
-                    sheen = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-                    pygame.draw.line(sheen, (255, 255, 255, int(50 * h_t)), (radius, 1), (draw_rect.width - radius, 1), 1)
-                    surface.blit(sheen, draw_rect)
-                border_color = lerp_color(theme.LINE, theme.ACCENT, h_t) if (self.enabled and h_t > 0) else theme.LINE
-                pygame.draw.rect(surface, border_color, draw_rect, 1, border_radius=radius)
-            elif self.kind == 'quiet' and h_t > 0.05:
-                quiet_border = (*theme.ACCENT[:3], int(130 * h_t))
-                col_b = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-                pygame.draw.rect(col_b, quiet_border, col_b.get_rect(), 1, border_radius=radius)
-                surface.blit(col_b, draw_rect)
+        if self.kind == 'primary' and self.enabled:
+            # Ánh sáng bóng phía trên kiểu kính
+            gradient = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            for row in range(max(1, draw_rect.height // 2)):
+                alpha = int((45 + 35 * h_t) * (1.0 - row / (draw_rect.height / 2)))
+                pygame.draw.line(gradient, (255, 255, 255, alpha), (0, row), (draw_rect.width, row))
+            mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
+            gradient.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            surface.blit(gradient, draw_rect)
+        elif self.kind != 'quiet':
+            if self.enabled and h_t > 0.01:
+                # Vệt sáng kính ở mép trên khi hover
+                sheen = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+                pygame.draw.line(sheen, (255, 255, 255, int(50 * h_t)), (radius, 1), (draw_rect.width - radius, 1), 1)
+                surface.blit(sheen, draw_rect)
+            border_color = lerp_color(theme.LINE, theme.ACCENT, h_t) if (self.enabled and h_t > 0) else theme.LINE
+            pygame.draw.rect(surface, border_color, draw_rect, 1, border_radius=radius)
+        elif self.kind == 'quiet' and h_t > 0.05:
+            quiet_border = (*theme.ACCENT[:3], int(130 * h_t))
+            col_b = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(col_b, quiet_border, col_b.get_rect(), 1, border_radius=radius)
+            surface.blit(col_b, draw_rect)
 
-        # Tactile material click ripple
-        if rip_t > 0.02 and self.enabled:
-            rip_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-            rip_r = max(4, int(draw_rect.width * 0.85 * rip_t))
-            rip_alpha = int(75 * (1.0 - rip_t))
-            rip_pos = (mouse_pos[0] - draw_rect.x, mouse_pos[1] - draw_rect.y)
-            pygame.draw.circle(rip_surf, (255, 255, 255, rip_alpha), rip_pos, rip_r)
-            rip_mask = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-            pygame.draw.rect(rip_mask, (255, 255, 255, 255), rip_mask.get_rect(), border_radius=radius)
-            rip_surf.blit(rip_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            surface.blit(rip_surf, draw_rect)
-
-        if self.selected and self.kind != 'dock_item':
-            pygame.draw.rect(surface, theme.ACCENT, draw_rect, 1, border_radius=12)
-
-        # Draw icon and label
+    def _draw_content(self, surface, font, draw_rect, foreground, h_t):
+        # Vẽ icon và nhãn
         has_vector_icon = bool(self.icon) or self.key in ('undo', 'restart', 'hint', 'play', 'step', 'back', 'stop',
                                                           'menu', 'settings', 'help', 'theme', 'solve', 'view', 'close', 'load')
         icon_name = self.icon or ('pause' if self.label == 'Pause' else self.key)
@@ -442,10 +455,10 @@ class Button:
             x_col = (255, 255, 255) if h_t > 0 else foreground
             draw_vector_icon(surface, 'close', (cx, cy), x_col, size=15)
         elif has_vector_icon and not self.label:
-            # Centered icon only
+            # Chỉ có icon, căn giữa
             draw_vector_icon(surface, icon_name, draw_rect.center, foreground, size=15)
         elif has_vector_icon and (self.kind in ('dock_item', 'icon', 'pill', 'primary', 'secondary') or self.key in ('undo', 'restart', 'hint', 'solve', 'view', 'menu', 'theme', 'settings', 'help', 'continue_game')):
-            # Centered (icon + gap + label + chevron) group
+            # Nhóm (icon + khoảng cách + nhãn + chevron) căn giữa
             is_dock = self.kind == 'dock_item'
             icon_size = 13 if is_dock else 14
             gap = 7
@@ -458,9 +471,7 @@ class Button:
             avail_w = draw_rect.width - 16
             if icon_size + gap + lbl_w + chev_space > avail_w:
                 lbl_max_w = max(10, avail_w - icon_size - gap - chev_space)
-                lbl_text = self.label
-                while lbl_text and font.size(lbl_text + '…')[0] > lbl_max_w:
-                    lbl_text = lbl_text[:-1]
+                lbl_text = _truncate(font, self.label, lbl_max_w)
                 lbl = font.render(lbl_text + ('…' if lbl_text != self.label else ''), True, foreground)
                 lbl_w = lbl.get_width()
 
@@ -471,11 +482,9 @@ class Button:
             lbl_rect = lbl.get_rect(midleft=(start_x + icon_size + gap, draw_rect.centery))
             surface.blit(lbl, lbl_rect)
             if has_chevron:
-                ch_x = lbl_rect.right + gap + 4
-                ch_y = draw_rect.centery
-                pygame.draw.lines(surface, foreground, False, [(ch_x - 4, ch_y - 2), (ch_x, ch_y + 2), (ch_x + 4, ch_y - 2)], 1)
+                _draw_chevron(surface, foreground, lbl_rect.right + gap + 4, draw_rect.centery)
         else:
-            # Centered label (with optional chevron)
+            # Nhãn căn giữa (có thể kèm chevron)
             has_chevron = self.key in ('choose', 'algorithm_menu')
             lbl = font.render(self.label, True, foreground)
             if has_chevron:
@@ -484,8 +493,6 @@ class Button:
                 start_x = round(draw_rect.centerx - total_w / 2)
                 lbl_rect = lbl.get_rect(midleft=(start_x, draw_rect.centery))
                 surface.blit(lbl, lbl_rect)
-                ch_x = lbl_rect.right + gap + 4
-                ch_y = draw_rect.centery
-                pygame.draw.lines(surface, foreground, False, [(ch_x - 4, ch_y - 2), (ch_x, ch_y + 2), (ch_x + 4, ch_y - 2)], 1)
+                _draw_chevron(surface, foreground, lbl_rect.right + gap + 4, draw_rect.centery)
             else:
                 surface.blit(lbl, lbl.get_rect(center=draw_rect.center))

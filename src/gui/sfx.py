@@ -1,41 +1,44 @@
-"""Sound effects: real files from assets/sfx/, generated tones as fallback.
+"""Hiệu ứng âm thanh: file thật trong assets/sfx/, âm tạo bằng code làm dự phòng.
 
-Drop a file named after the event into assets/sfx/ to replace its sound:
+Đặt một file mang tên sự kiện vào assets/sfx/ để thay âm thanh của nó:
 
-    roll    the block rolls one step
-    switch  a switch toggles a bridge
-    split   the block splits into two cubes (split switch)
-    fall    the block falls off the board
-    win     the block sinks into the goal
+    roll    khối lăn một bước
+    switch  công tắc bật/tắt cầu
+    split   khối tách thành hai khối nhỏ (công tắc tách)
+    fall    khối rơi khỏi bàn
+    win     khối chìm vào ô đích
 
-Accepted formats: .wav, .ogg, .mp3 (checked in that order). A missing file
-falls back to a short tone generated in code, so the game always has sound.
+Định dạng hỗ trợ: .wav, .ogg, .mp3 (xét theo thứ tự đó). Thiếu file thì dùng
+một âm ngắn tạo bằng code, nên game luôn có âm thanh.
 """
 from __future__ import annotations
 
+import logging
 import math
 from array import array
 from pathlib import Path
 
 import pygame
 
-SFX_DIR = Path(__file__).resolve().parents[2] / 'assets' / 'sfx'
+from src.gui.theme import ASSETS_DIR
+
+SFX_DIR = ASSETS_DIR / 'sfx'
 EVENTS = ('roll', 'switch', 'split', 'fall', 'win')
 FORMATS = ('.wav', '.ogg', '.mp3')
 
-# Fallback tones: list of (start Hz, end Hz, seconds). Several entries play one
-# after another (the win jingle). Pitch glides linearly from start to end.
+# Âm dự phòng: danh sách (Hz đầu, Hz cuối, giây). Nhiều phần tử thì phát lần lượt
+# (nhạc thắng). Cao độ trượt tuyến tính từ đầu tới cuối.
 TONES = {
-    'roll':   [(220, 160, 0.07)],                      # short low thud
-    'switch': [(880, 880, 0.06), (1320, 1320, 0.06)],  # two-note click
-    'split':  [(400, 1200, 0.18)],                     # rising whoosh
-    'fall':   [(700, 120, 0.45)],                      # long falling whistle
+    'roll':   [(220, 160, 0.07)],                      # tiếng thịch trầm, ngắn
+    'switch': [(880, 880, 0.06), (1320, 1320, 0.06)],  # tiếng click hai nốt
+    'split':  [(400, 1200, 0.18)],                     # tiếng vút đi lên
+    'fall':   [(700, 120, 0.45)],                      # tiếng huýt dài đi xuống
     'win':    [(523, 523, 0.11), (659, 659, 0.11), (784, 784, 0.22)],  # C-E-G
 }
 
 
 def _tone(parts, rate: int, channels: int, loudness: int = 5000) -> pygame.mixer.Sound:
-    """Build a sine-wave sound that fades out at the end of each note."""
+    """Tạo âm sóng sin, nhỏ dần ở cuối mỗi nốt."""
     samples = array('h')
     phase = 0.0
     for start_hz, end_hz, seconds in parts:
@@ -43,18 +46,17 @@ def _tone(parts, rate: int, channels: int, loudness: int = 5000) -> pygame.mixer
         for i in range(count):
             hz = start_hz + (end_hz - start_hz) * i / count
             phase += 2 * math.pi * hz / rate
-            envelope = min(1.0, i / (rate * 0.005)) * (1 - i / count)  # 5 ms fade-in, fade-out
+            envelope = min(1.0, i / (rate * 0.005)) * (1 - i / count)  # to dần 5 ms, rồi nhỏ dần
             samples.extend([int(loudness * envelope * math.sin(phase))] * channels)
     return pygame.mixer.Sound(buffer=samples)
 
 
 class SoundBank:
-    """One Sound per event. Create only after pygame.mixer is initialised."""
+    """Mỗi sự kiện một Sound. Chỉ tạo sau khi pygame.mixer đã khởi tạo."""
 
     def __init__(self, folder: Path = SFX_DIR, volume: float = 0.6):
         rate, _, channels = pygame.mixer.get_init()
         self.sounds: dict[str, pygame.mixer.Sound] = {}
-        self.from_file: set[str] = set()
         for name in EVENTS:
             path = next((folder / f'{name}{ext}' for ext in FORMATS
                          if (folder / f'{name}{ext}').exists()), None)
@@ -62,9 +64,8 @@ class SoundBank:
             if path is not None:
                 try:
                     sound = pygame.mixer.Sound(str(path))
-                    self.from_file.add(name)
-                except pygame.error as error:  # unreadable file: keep the tone
-                    print(f'SFX: cannot load {path.name}: {error}')
+                except pygame.error as error:  # file không đọc được: giữ âm tạo bằng code
+                    logging.getLogger(__name__).warning('SFX: cannot load %s: %s', path.name, error)
             self.sounds[name] = sound or _tone(TONES[name], rate, channels)
         self.set_volume(volume)
 
@@ -74,7 +75,7 @@ class SoundBank:
             sound.set_volume(self.volume)
 
     def play(self, name: str = 'roll', volume: float = 1.0) -> None:
-        """volume (0..1) scales this one play, e.g. for softer bounces."""
+        """volume (0..1) chỉnh âm lượng cho lần phát này, ví dụ cho các lần nảy nhẹ hơn."""
         sound = self.sounds.get(name)
         if sound is not None:
             channel = sound.play()

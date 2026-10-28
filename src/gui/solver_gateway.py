@@ -1,4 +1,4 @@
-﻿"""Spawn-based solver adapter. Pygame is never imported by a worker."""
+"""Adapter solver chạy bằng spawn. Worker không bao giờ import Pygame."""
 from __future__ import annotations
 import multiprocessing as mp
 from time import monotonic

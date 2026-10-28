@@ -1,1 +1,1 @@
-"""Search algorithms package."""
+"""Package các thuật toán tìm kiếm."""

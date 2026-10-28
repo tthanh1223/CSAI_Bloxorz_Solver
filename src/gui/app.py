@@ -1,4 +1,4 @@
-"""GUI orchestration: engine is the only source of game rules."""
+"""Điều phối GUI: engine là nguồn duy nhất của luật chơi."""
 from __future__ import annotations
 import collections
 import json
@@ -6,23 +6,27 @@ import math
 import time
 from pathlib import Path
 import pygame
-from src.engine.loader import load_stage
-from src.engine.problem import BloxorzProblem, GameSession
+from src.engine.loader import initial_state, load_stage
+from src.engine.problem import LOST, WON, BloxorzProblem, GameSession
 from src.engine.state import Action, GameState, Orientation
 from src.gui.animation import RollAnimation
 from src.gui.replay import PathReplay
-from src.gui.renderer3d import IsometricRenderer, VIEWS, INTRO_SECONDS, INTRO_IMPACTS
+from src.gui.renderer3d import IsometricRenderer, VIEWS, INTRO_SECONDS, INTRO_IMPACTS, SHOCKWAVE_SECONDS
 from src.gui.solver_gateway import ProcessSolverGateway
 from src.gui.contracts import SolverRequest, SolverStatus, ReplayStatus
 from src.gui import theme
-from src.gui.presentation import draw as draw_presentation, draw_header_emblem, sharp_board
+from src.gui.presentation import (STAGES_PER_PAGE, board_effects, camera_shake, draw as draw_presentation,
+                                  draw_header_emblem, sharp_board)
+from src.gui.themes import cycle_theme
 
 ROOT = Path(__file__).resolve().parents[2]
 SAVE_PATH = ROOT / 'data' / 'gui_session.json'
-
-
-def initial_state(stage):
-    return GameState(stage.start, stage.start, Orientation.STANDING, 0, stage.initial_bridge_mask)
+BGM_TRACKS = (theme.ASSETS_DIR / 'bgm' / 'the_mountain-retro-game-593063.mp3',
+              theme.ASSETS_DIR / 'bgm' / 'cheerful_puzzle.wav')  # dùng file đầu tiên tồn tại
+SOLVER_TIMEOUT = 30.0
+REPLAY_STEP_SECONDS = 0.12
+REPLAY_SPEEDS = {0.5: 1, 1: 2, 2: 4, 4: 0.5}  # tốc độ hiện tại -> tốc độ kế tiếp
+ZOOM_MIN, ZOOM_MAX, ZOOM_STEP = 0.5, 2.5, 0.1
 
 
 def state_dict(state):
@@ -48,32 +52,35 @@ def read_state(data):
     return state
 
 
-class FramePacer:
-    """Show frames at an even rate, in step with the display's refresh.
+def _slider_ratio(rect, x):
+    return max(0.0, min(1.0, (x - rect.x) / max(1, rect.w)))
 
-    On macOS window.flip() waits for the next screen refresh. A ProMotion
-    screen refreshes at 120 Hz, more often than a frame can be drawn while
-    things move (~7-10 ms), so frames would alternate between one and two
-    refreshes and motion looks jerky. Instead every frame gets the same number
-    of refreshes (60 FPS on 120 Hz): before flipping we wait until just before
-    the right refresh. Where flip does not wait (no vsync), the same deadline
-    simply paces frames by the clock.
+
+class FramePacer:
+    """Hiển thị frame đều nhịp, khớp với tần số làm tươi của màn hình.
+
+    Trên macOS window.flip() chờ lần làm tươi kế tiếp. Màn ProMotion làm tươi
+    120 Hz, nhanh hơn thời gian vẽ một frame khi có chuyển động (~7-10 ms), nên
+    frame sẽ lúc chiếm một lúc chiếm hai lần làm tươi và chuyển động bị giật.
+    Thay vào đó mọi frame được cùng số lần làm tươi (60 FPS trên 120 Hz): trước
+    khi flip ta chờ tới ngay trước lần làm tươi phù hợp. Nơi flip không chờ
+    (không có vsync), cùng mốc thời gian đó chỉ đơn giản giãn frame theo đồng hồ.
     """
 
     def __init__(self, refresh_hz=60):
         refresh_hz = refresh_hz if refresh_hz and refresh_hz > 0 else 60
-        self.frame_s = max(1, int(refresh_hz) // 55) / refresh_hz  # 60 FPS on 60/120/240 Hz
+        self.frame_s = max(1, int(refresh_hz) // 55) / refresh_hz  # 60 FPS trên màn 60/120/240 Hz
         self.flip_waits = collections.deque(maxlen=30)
         self.last_flip = time.perf_counter()
 
     def wait_and_flip(self, window, drew=True):
         waits = sorted(self.flip_waits)
         vsync = len(waits) >= 10 and waits[len(waits) // 2] > .0005
-        # With vsync aim just before the refresh we want; flip then waits for it.
+        # Có vsync thì nhắm ngay trước lần làm tươi cần tới; sau đó flip sẽ chờ nó.
         deadline = self.last_flip + self.frame_s - (.002 if vsync else 0.0)
         remaining = deadline - time.perf_counter()
         if remaining > .002:
-            time.sleep(remaining - .0015)  # coarse sleep, then spin for precision
+            time.sleep(remaining - .0015)  # ngủ thô trước, rồi quay vòng để chính xác
         while time.perf_counter() < deadline:
             pass
         if drew:
@@ -87,11 +94,11 @@ class FramePacer:
 
 class BloxorzApp:
     WINDOW_SIZE = (1080, 620)
-    FALL_SECONDS = 0.9  # roll to the edge, tip over and drop, then restart
-    ROLL_SECONDS = 0.18   # one roll; the same with or without a switch press
-    BRIDGE_SECONDS = 0.45  # a switch's bridges fly in / shatter, after the block lands
-    WIN_SECONDS = 0.7   # the block sinks into the goal hole
-    OUTRO_SECONDS = 0.9  # then the tiles fall away, rippling out from the goal
+    FALL_SECONDS = 0.9  # lăn tới mép, lật qua và rơi, rồi chơi lại
+    ROLL_SECONDS = 0.18   # một lần lăn; như nhau dù có bấm công tắc hay không
+    BRIDGE_SECONDS = 0.45  # cầu của công tắc bay vào / vỡ ra, sau khi khối tiếp đất
+    WIN_SECONDS = 0.7   # khối chìm vào lỗ đích
+    OUTRO_SECONDS = 0.9  # sau đó các ô rơi đi, lan dần ra từ ô đích
 
     def __init__(self, session, stage_paths=None, gateway=None):
         self.session = session
@@ -116,7 +123,7 @@ class BloxorzApp:
         self.speed = 1.0
         self.wait = 0.0
         self.animate = True
-        self.sound_enabled = True  # on by default; Settings > Sound turns it off
+        self.sound_enabled = True  # bật sẵn; Settings > Sound để tắt
         self.bgm_volume: float = 0.10
         self.sfx_volume: float = 0.85
         self.active_slider: str | None = None
@@ -136,34 +143,46 @@ class BloxorzApp:
         self.modal_rect = pygame.Rect(0, 0, 0, 0)
         self.dropdown_rect = pygame.Rect(0, 0, 0, 0)
         self.message = 'Roll with arrows or WASD. Reach G standing upright.'
-        self.screen = None  # logical (1x) frame the UI is laid out on
-        self.window = None  # run(): HiDPI window; its surface may be 2x the screen
+        self.screen = None  # frame logic (1x) để dàn UI
+        self.window = None  # run(): cửa sổ HiDPI; surface của nó có thể gấp đôi screen
         self.hidpi = 1
         self._hi_base = self._hi_board = None
-        self._hi_ui_shown = None  # UI frame last copied in full to the window (see present())
-        self.bridge_fx = None  # (old bridges, new bridges, progress) while bridges animate
-        self._queued_bridges = None  # set by a switch press, started when the roll lands
+        self._hi_ui_shown = None  # frame UI vừa được chép trọn vào cửa sổ (xem present())
+        self.bridge_fx = None  # (cầu cũ, cầu mới, tiến độ) khi cầu đang chạy animation
+        self._queued_bridges = None  # được đặt khi bấm công tắc, bắt đầu khi lần lăn tiếp đất
         self.buttons = []
         self.seek_rect = pygame.Rect(0, 0, 0, 0)
         self.board_rect = pygame.Rect(0, 0, 1, 1)
-        self.font = self.small_font = self.title_font = None
+        self.metric_rects = []
         self.pending_action = None
-        # Win sequence (manual play only): 'roll' -> 'sink' -> 'choice' (replay or next stage).
+        # Chuỗi thắng (chỉ khi tự chơi): 'roll' -> 'sink' -> 'choice' (xem lại hoặc qua màn).
         self.win_phase = None
         self.stage_cleared: bool = False
         self.intro_t: float | None = None
         self.outro_t: float | None = None
-        self.board_cleared = False  # see board_outro()
+        self.board_cleared = False  # xem board_outro()
         self.trauma: float = 0.0
         self.shockwave: tuple[float, float, float] | None = None
         self.in_main_menu: bool = False
         self.solver_open: bool = False
         self.drawer_t: float = 0.0
-        self.camera_pan_x: float = 0.0
         self.menu_t: float = 0.0
+        self.visual_style = self.theme_name = 'dream'  # do themes.apply_theme() đặt
+        self.running = False
+        self._planned_for = None
+        # Cache và trạng thái từng frame do presentation.py quản lý.
+        self._ticks = 0
+        self._presentation_cache = None
+        self._scene_cache = None
+        self._board_surface = None
+        self._veil_cache = None
+        self._emblem = None
 
     def add_trauma(self, amount: float):
-        self.trauma = min(1.0, getattr(self, 'trauma', 0.0) + amount)
+        self.trauma = min(1.0, self.trauma + amount)
+
+    def _count_moves(self):
+        self.session.moves = sum(a != Action.SPACE for a in self.actions)
 
     @property
     def busy(self):
@@ -202,12 +221,12 @@ class BloxorzApp:
         self.outro_t = None
 
     def new_session(self, state):
-        self.win_phase = None  # any reload/restart/replay cancels the win sequence
-        self.bridge_fx = self._queued_bridges = None  # bridges are shown as they are
-        self.board_cleared = False  # True once a won stage's board has fallen away
+        self.win_phase = None  # mọi lần load/restart/replay đều huỷ chuỗi thắng
+        self.bridge_fx = self._queued_bridges = None  # cầu được hiển thị đúng trạng thái hiện tại
+        self.board_cleared = False  # True khi bàn của màn đã thắng đã rơi hết
         self.session = GameSession(BloxorzProblem(self.stage, state))
         if self.session.problem.is_goal(state):
-            self.session.status = 'WON'
+            self.session.status = WON
         self.record_start = state
         self.actions = []
 
@@ -245,8 +264,8 @@ class BloxorzApp:
         if not replay and self.replay.status != ReplayStatus.EMPTY:
             self.message = 'Exit replay to play manually.'
             return False
-        if self.session.status == 'WON':
-            return False  # stage already finished; the win sequence takes over
+        if self.session.status == WON:
+            return False  # màn đã xong; chuỗi thắng sẽ tiếp quản
         before = self.session.current_state
         if not self.session.apply_action(action):
             fallen = None if replay else self.session.fall(action)
@@ -256,10 +275,10 @@ class BloxorzApp:
                 self.message = 'Blocked. Keep the whole block on solid ground.'
             return False
         self.actions.append(action)
-        self.session.moves = sum(a != Action.SPACE for a in self.actions)
+        self._count_moves()
         if self.animate:
-            # The block always rolls at its normal speed. If this roll presses a
-            # switch, the bridge animation starts once the block lands (update()).
+            # Khối luôn lăn với tốc độ bình thường. Nếu lần lăn này bấm công tắc,
+            # animation của cầu bắt đầu khi khối tiếp đất (update()).
             self.animation.duration_sec = self.ROLL_SECONDS / self.speed
             self.animation.start(before, self.session.current_state, action)
             if self.session.current_state.bridges_status != before.bridges_status:
@@ -267,8 +286,8 @@ class BloxorzApp:
         self.result = self.result if replay else None
         if not replay:
             self.solver_status = SolverStatus.IDLE
-            if self.session.status == 'WON':
-                self.win_phase = 'roll'  # update() starts the sink once the roll ends
+            if self.session.status == WON:
+                self.win_phase = 'roll'  # update() bắt đầu chìm khi lần lăn kết thúc
         after = self.session.current_state
         if action != Action.SPACE:
             self.play_sfx('roll')
@@ -283,16 +302,16 @@ class BloxorzApp:
             mid_r = (after.pos1[0] + after.pos2[0]) / 2.0
             mid_c = (after.pos1[1] + after.pos2[1]) / 2.0
             self.shockwave = (mid_r, mid_c, 0.0)
-        if self.session.status == 'WON':
+        if self.session.status == WON:
             self.play_sfx('win')
         self.message = 'Rolling...' if self.animation.busy else 'Move accepted.'
         return True
 
     def start_fall(self, before, fallen, action):
-        """The block rolled off the board (session.status is now 'LOST').
+        """Khối lăn ra khỏi bàn (session.status lúc này là LOST).
 
-        Play the fall animation; update() restarts the stage once it ends.
-        Without animation the restart happens on the next update().
+        Chạy animation rơi; update() chơi lại màn khi animation kết thúc.
+        Không có animation thì chơi lại ở lần update() kế tiếp.
         """
         self.pending_action = None
         self.result = None
@@ -305,7 +324,7 @@ class BloxorzApp:
             self.animation.start(before, fallen, action, falling=True)
 
     def play_sfx(self, name, volume=1.0):
-        """Play one sound effect (see src/gui/sfx.py) if sound is on."""
+        """Phát một hiệu ứng âm thanh (xem src/gui/sfx.py) nếu âm thanh đang bật."""
         if self.sound_enabled and self.sound:
             self.sound.play(name, volume)
 
@@ -314,10 +333,10 @@ class BloxorzApp:
         self.message = 'You fell off. Stage restarted - try again!'
 
     def advance_win(self):
-        """Called every update(): drive the win sequence one step forward."""
+        """Gọi ở mỗi update(): đẩy chuỗi thắng tiến thêm một bước."""
         if self.win_phase in (None, 'choice', 'disassemble') or self.animation.busy:
             return
-        if self.session.status != 'WON':  # e.g. undone before the sink started
+        if self.session.status != WON:  # ví dụ: đã undo trước khi bắt đầu chìm
             self.win_phase = None
             return
         if self.win_phase == 'roll' and self.animate:
@@ -331,7 +350,7 @@ class BloxorzApp:
             self.win_phase = 'disassemble'
             self.outro_t = 0.0
             return
-        # Sink finished (or animation is off): let the player replay or move on.
+        # Chìm xong (hoặc tắt animation): cho người chơi xem lại hoặc qua màn.
         self.win_phase = 'choice'
         self.stage_cleared = True
         self.message = 'Stage complete!'
@@ -346,7 +365,7 @@ class BloxorzApp:
             self.message = f'Last stage done in {moves} moves - you finished every stage!'
 
     def replay_win(self):
-        """Watch the winning moves from the start; Exit replay returns to the choice."""
+        """Xem lại các nước thắng từ đầu; Exit replay quay về hộp lựa chọn."""
         self.load_replay(self.record_start, tuple(self.actions))
         self.replay.play()
         self.message = 'Replaying your moves.'
@@ -361,7 +380,7 @@ class BloxorzApp:
         self.session.undo()
         self.bridge_fx = self._queued_bridges = None
         self.actions.pop()
-        self.session.moves = sum(a != Action.SPACE for a in self.actions)
+        self._count_moves()
         self.result = None
         self.solver_status = SolverStatus.IDLE
         self.message = 'Last move undone.'
@@ -371,7 +390,7 @@ class BloxorzApp:
             return
         self.request_id += 1
         self.solve_start = self.session.current_state if hint or self.solve_current else initial_state(self.stage)
-        request = SolverRequest(self.request_id, self.algorithm, self.stage, self.solve_start, 30.0)
+        request = SolverRequest(self.request_id, self.algorithm, self.stage, self.solve_start, SOLVER_TIMEOUT)
         try:
             self.gateway.submit(request)
         except Exception as error:
@@ -384,10 +403,10 @@ class BloxorzApp:
             self.details_open = True
         self.result = None
         self.solver_status = SolverStatus.RUNNING
-        self.message = 'Finding a hint...' if hint else 'Searching (30 second limit)...'
+        self.message = 'Finding a hint...' if hint else f'Searching ({SOLVER_TIMEOUT:g} second limit)...'
 
     def load_replay(self, start, path):
-        # Validate the whole path before replacing the current session.
+        # Kiểm tra cả đường đi trước khi thay session hiện tại.
         probe = GameSession(BloxorzProblem(self.stage, start))
         if not probe.problem.check_validity(start):
             raise ValueError('Replay initial state is unsupported.')
@@ -421,7 +440,7 @@ class BloxorzApp:
                 self.message = 'Replay stopped: invalid path.'
                 return
             self.actions.append(action)
-        self.session.moves = sum(a != Action.SPACE for a in self.actions)
+        self._count_moves()
         self.replay.load(start, path)
         self.replay.index = index
         self.replay.status = ReplayStatus.FINISHED if index == len(path) else ReplayStatus.PAUSED
@@ -432,7 +451,7 @@ class BloxorzApp:
         if self.animation.busy:
             self.animation.reset()
         if self.stage_cleared and self.replay.initial_state is not None:
-            # Watching a finished stage: jump back to the goal and offer the choice again.
+            # Đang xem lại màn đã xong: nhảy về ô đích và hiện lại hộp lựa chọn.
             self.seek(self.replay.length)
             self.replay.reset()
             self.win_phase = 'choice'
@@ -505,10 +524,10 @@ class BloxorzApp:
             if not isinstance(settings, dict):
                 raise ValueError('Invalid settings.')
             speed = float(settings.get('speed', 1))
-            if speed not in (0.5, 1, 2, 4):
+            if speed not in REPLAY_SPEEDS:
                 raise ValueError('Invalid playback speed.')
             view = settings.get('view', self.renderer.view)
-            if view == 'front':  # removed view; older saves fall back to the default
+            if view == 'front':  # góc nhìn đã bỏ; save cũ dùng góc nhìn mặc định
                 view = VIEWS[0]
             if view not in VIEWS:
                 raise ValueError('Invalid camera view.')
@@ -521,9 +540,9 @@ class BloxorzApp:
         self.new_session(start)
         self.session = probe
         self.actions = list(actions)
-        self.session.moves = sum(a != Action.SPACE for a in actions)
+        self._count_moves()
         if self.session.problem.is_goal(self.session.current_state):
-            self.session.status = 'WON'
+            self.session.status = WON
         if replay_data:
             self.replay.load(replay_start, replay_path)
             self.replay.index = cursor
@@ -542,7 +561,7 @@ class BloxorzApp:
     def update(self, dt):
         self.animation.update(dt)
         self._plan_bridge_boards()
-        # Bridge timeline: (old status, new status, progress 0..1), independent of rolls.
+        # Dòng thời gian của cầu: (trạng thái cũ, trạng thái mới, tiến độ 0..1), độc lập với lần lăn.
         if self.bridge_fx is not None:
             old, new, progress = self.bridge_fx
             progress += dt * self.speed / self.BRIDGE_SECONDS
@@ -550,16 +569,16 @@ class BloxorzApp:
         if self._queued_bridges is not None and not self.animation.busy:
             self.bridge_fx = (*self._queued_bridges, 0.0)
             self._queued_bridges = None
-        if getattr(self, 'trauma', 0.0) > 0.0:
+        if self.trauma > 0.0:
             self.trauma = max(0.0, self.trauma - dt * 1.8)
-        if getattr(self, 'shockwave', None) is not None:
+        if self.shockwave is not None:
             r, c, st = self.shockwave
             st += dt
-            self.shockwave = (r, c, st) if st < 0.35 else None
+            self.shockwave = (r, c, st) if st < SHOCKWAVE_SECONDS else None
         if self.intro_t is not None:
             before = self.intro_t * INTRO_SECONDS
             self.intro_t += dt / INTRO_SECONDS
-            for hit, speed in INTRO_IMPACTS:  # the dropped block lands: a thud per bounce
+            for hit, speed in INTRO_IMPACTS:  # khối thả xuống tiếp đất: mỗi lần nảy một tiếng thịch
                 if before < hit <= self.intro_t * INTRO_SECONDS:
                     self.play_sfx('roll', volume=speed)
             if self.intro_t >= 1.0:
@@ -569,11 +588,11 @@ class BloxorzApp:
             self.outro_t += dt / self.OUTRO_SECONDS
             if self.outro_t >= 1.0:
                 self.outro_t = None
-                self.board_cleared = True  # the block and tiles stay gone behind the dialog
+                self.board_cleared = True  # khối và các ô biến mất hẳn phía sau hộp thoại
                 self.win_phase = 'choice'
                 self.stage_cleared = True
                 self.message = 'Stage complete!'
-        if self.session.status == 'LOST' and not self.animation.busy:
+        if self.session.status == LOST and not self.animation.busy:
             self.finish_fall()
         self.advance_win()
         response = self.gateway.poll()
@@ -589,32 +608,28 @@ class BloxorzApp:
                 self.message = response.result.error or response.status.value.replace('_', ' ')
         if (self.pending_action is not None and not self.animation.busy and not self.busy
                 and self.replay.status == ReplayStatus.EMPTY and not (self.menu or self.stage_picker or self.dropdown_open)):
-            action,self.pending_action=self.pending_action,None
+            action, self.pending_action = self.pending_action, None
             self.apply_action(action)
         if self.replay.status == ReplayStatus.PLAYING and not self.animation.busy:
             self.wait -= dt
             if self.wait <= 0:
                 self.replay_step()
-                self.wait = 0.12 / self.speed
+                self.wait = REPLAY_STEP_SECONDS / self.speed
         target_drawer = 1.0 if self.solver_open else 0.0
         self.drawer_t += (target_drawer - self.drawer_t) * min(1.0, dt * 14.0)
         if abs(self.drawer_t - target_drawer) < 0.002:
             self.drawer_t = target_drawer
-        self.camera_pan_x = 0.0
         target_menu = 1.0 if self.in_main_menu else 0.0
         self.menu_t += (target_menu - self.menu_t) * min(1.0, dt * 9.0)
 
-        if (self.session.status == 'WON' and self.win_phase is None and not self.animation.busy
+        if (self.session.status == WON and self.win_phase is None and not self.animation.busy
                 and not self.busy and self.replay.status != ReplayStatus.EMPTY):
             self.message = ('Replay finished. Exit replay to continue.' if self.stage_cleared
                             else 'Stage complete. Choose another stage above.')
 
     def handle_key(self, key):
         if self.in_main_menu:
-            if key in (pygame.K_RETURN, pygame.K_SPACE):
-                self.command('continue_game')
-                return
-            if key == pygame.K_ESCAPE:
+            if key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
                 self.command('continue_game')
                 return
             if key == pygame.K_n:
@@ -654,7 +669,7 @@ class BloxorzApp:
         if key in shortcuts:
             self.command(shortcuts[key])
             return
-        if key == pygame.K_RETURN and self.session.status == 'WON':
+        if key == pygame.K_RETURN and self.session.status == WON:
             self.next_stage()
             return
         mapping = {pygame.K_UP: Action.UP, pygame.K_w: Action.UP, pygame.K_DOWN: Action.DOWN,
@@ -662,8 +677,9 @@ class BloxorzApp:
                    pygame.K_RIGHT: Action.RIGHT, pygame.K_d: Action.RIGHT, pygame.K_SPACE: Action.SPACE}
         if key in mapping:
             if self.animation.busy and not self.busy and self.replay.status == ReplayStatus.EMPTY:
-                self.pending_action=mapping[key]
-            else:self.apply_action(mapping[key])
+                self.pending_action = mapping[key]
+            else:
+                self.apply_action(mapping[key])
 
     def command(self, key):
         if key == 'main_menu':
@@ -680,7 +696,7 @@ class BloxorzApp:
         if key == 'continue_game':
             self.in_main_menu = False
             return
-        if key == 'toggle_solver':
+        if key in ('toggle_solver', 'solve'):
             self.solver_open = not self.solver_open
             if self.solver_open:
                 self.details_open = True
@@ -688,12 +704,10 @@ class BloxorzApp:
         if key == 'close_solver':
             self.solver_open = False
             return
-        if key in ('exit_game', 'quit'):
-            self._exit_requested = True
+        if key == 'exit_game':
             pygame.event.post(pygame.event.Event(pygame.QUIT))
             return
         if key == 'theme':
-            from src.gui.themes import cycle_theme
             cycle_theme(self)
             return
         if key in ('settings', 'help'):
@@ -731,107 +745,117 @@ class BloxorzApp:
             self.in_main_menu = False
             self.stage_picker = False
             self.menu = None
-            return
         elif key == 'choose':
             self.stage_picker = not self.stage_picker
-            self.picker_page = self.stage_index // 20
+            self.picker_page = self.stage_index // STAGES_PER_PAGE
             if self.stage_picker:
                 self.replay.pause()
         elif key == 'page_prev':
             self.picker_page = max(0, self.picker_page - 1)
         elif key == 'page_next':
-            self.picker_page = min((len(self.stage_paths) - 1) // 20, self.picker_page + 1)
-        elif key == 'next_stage': self.next_stage()
-        elif key == 'win_replay' and self.actions and not self.busy: self.replay_win()
-        elif key == 'restart': self.restart()
-        elif key == 'undo': self.undo()
-        elif key == 'solve':
-            self.solver_open = not self.solver_open
-            if self.solver_open:
-                self.details_open = True
+            self.picker_page = min((len(self.stage_paths) - 1) // STAGES_PER_PAGE, self.picker_page + 1)
+        elif key == 'next_stage':
+            self.next_stage()
+        elif key == 'win_replay' and self.actions and not self.busy:
+            self.replay_win()
+        elif key == 'restart':
+            self.restart()
+        elif key == 'undo':
+            self.undo()
         elif key == 'solve_now':
             self.solve()
-        elif key == 'hint': self.solve(True)
+        elif key == 'hint':
+            self.solve(True)
         elif key == 'cancel' and self.busy:
             self.gateway.cancel(self.active_request)
         elif key.startswith('algorithm:') and not self.busy:
             self.algorithm = key.split(':')[1]
             self.dropdown_open = False
-        elif key == 'source' and not self.busy:
-            self.solve_current = not self.solve_current
         elif key == 'solution' and self.result and self.result.found and not self.busy:
             self.load_replay(self.solve_start, self.result.path)
             self.replay.play()
         elif key == 'recording' and self.actions and not self.busy:
             self.load_replay(self.record_start, tuple(self.actions))
         elif key == 'play' and not self.busy:
-            if self.replay.status == ReplayStatus.PLAYING:
-                self.replay.pause()
-            else:
-                if self.replay.status == ReplayStatus.FINISHED:
-                    self.seek(0)
-                self.replay.play()
+            self._toggle_play()
         elif key == 'step':
             self.replay.pause()
             self.replay_step()
-        elif key == 'back': self.seek(self.replay.index - 1)
-        elif key == 'stop': self.stop_replay()
+        elif key == 'back':
+            self.seek(self.replay.index - 1)
+        elif key == 'stop':
+            self.stop_replay()
         elif key == 'speed':
-            self.speed = {0.5: 1, 1: 2, 2: 4, 4: 0.5}[self.speed]
-        elif key == 'save': self.save()
-        elif key == 'load': self.load()
-        elif key == 'camera': self.zoom, self.pan = 1.0, [0, 0]
+            self.speed = REPLAY_SPEEDS[self.speed]
+        elif key == 'save':
+            self.save()
+        elif key == 'load':
+            self.load()
+        elif key == 'camera':
+            self.zoom, self.pan = 1.0, [0, 0]
         elif key == 'view':
-            view = VIEWS[(VIEWS.index(self.renderer.view) + 1) % len(VIEWS)]
-            self.renderer.set_view(view)
-            self.message = {'original': 'Original game view.', 'iso': 'Classic isometric view.'}[view]
+            self._cycle_view()
         elif key == 'animate':
             self.animate = not self.animate
-            if not self.animate: self.animation.reset()
+            if not self.animate:
+                self.animation.reset()
         elif key == 'sound':
-            if self.sound is None:
-                self.message = 'Audio device unavailable.'
-            else:
-                self.sound_enabled = not self.sound_enabled
-                if pygame.mixer.get_init():
-                    if self.sound_enabled:
-                        try:
-                            pygame.mixer.music.unpause()
-                            pygame.mixer.music.set_volume(self.bgm_volume)
-                            if self.sound:
-                                self.sound.set_volume(self.sfx_volume)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            pygame.mixer.music.pause()
-                            if self.sound:
-                                self.sound.set_volume(0.0)
-                        except Exception:
-                            pass
+            self._toggle_sound()
+        elif key == 'contrast':
+            self.high_contrast = not self.high_contrast
+        elif key == 'text':
+            self.large_text = not self.large_text
 
-        elif key == 'contrast': self.high_contrast = not self.high_contrast
-        elif key == 'text': self.large_text = not self.large_text
+    def _toggle_play(self):
+        if self.replay.status == ReplayStatus.PLAYING:
+            self.replay.pause()
+        else:
+            if self.replay.status == ReplayStatus.FINISHED:
+                self.seek(0)
+            self.replay.play()
+
+    def _cycle_view(self):
+        view = VIEWS[(VIEWS.index(self.renderer.view) + 1) % len(VIEWS)]
+        self.renderer.set_view(view)
+        self.message = {'original': 'Original game view.', 'iso': 'Classic isometric view.'}[view]
+
+    def _toggle_sound(self):
+        if self.sound is None:
+            self.message = 'Audio device unavailable.'
+            return
+        self.sound_enabled = not self.sound_enabled
+        if not pygame.mixer.get_init():
+            return
+        try:
+            if self.sound_enabled:
+                pygame.mixer.music.unpause()
+                pygame.mixer.music.set_volume(self.bgm_volume)
+                self.sound.set_volume(self.sfx_volume)
+            else:
+                pygame.mixer.music.pause()
+                self.sound.set_volume(0.0)
+        except Exception:
+            pass
 
     def draw(self):
         return draw_presentation(self)
 
     def _plan_bridge_boards(self):
-        """Tell the renderer which bridge layouts are up to two moves away, so it
-        composes those boards before a switch is pressed (no hitch when a
-        bridge appears or disappears). Recomputed only when the state changes."""
+        """Báo cho renderer các bố cục cầu có thể gặp trong tối đa hai nước tới, để nó
+        dựng sẵn các bàn đó trước khi công tắc được bấm (không khựng khi cầu hiện ra
+        hoặc biến mất). Chỉ tính lại khi state thay đổi."""
         state = self.session.current_state
-        if getattr(self, '_planned_for', None) == state or not hasattr(self.renderer, 'want_boards'):
+        if self._planned_for == state:
             return
         self._planned_for = state
         problem = self.session.problem
         wanted, seen, frontier = [], {state}, [state]
-        for _ in range(2):  # nearest moves first
+        for _ in range(2):  # nước gần nhất trước
             following = []
             for here in frontier:
                 for _, there, _ in problem.get_successors(here):
                     if there.bridges_status != here.bridges_status:
-                        # Board while the bridges animate (changing ones left out), then after.
+                        # Bàn trong lúc cầu chạy animation (bỏ các cầu đang đổi), rồi bàn sau đó.
                         during = tuple(a and b for a, b in zip(here.bridges_status, there.bridges_status))
                         for status in (during, there.bridges_status):
                             if status != state.bridges_status and status not in wanted:
@@ -843,16 +867,16 @@ class BloxorzApp:
         self.renderer.want_boards(wanted)
 
     def board_outro(self):
-        """Progress of the win outro for the renderer: running, 1.0 once the board
-        has fallen away (it stays empty until the player moves on), else None."""
+        """Tiến độ outro thắng cho renderer: đang chạy, 1.0 khi bàn đã rơi hết
+        (bàn trống cho tới khi người chơi đi tiếp), ngược lại None."""
         if self.outro_t is not None:
             return self.outro_t
         return 1.0 if self.board_cleared else None
 
     def bridge_view(self):
-        """What the renderer should show for bridges: the running bridge animation,
-        or, while the switch-pressing roll is still under way, its starting pose
-        (so the new bridge does not show up before the block lands)."""
+        """Renderer cần vẽ cầu thế nào: animation cầu đang chạy, hoặc, khi lần lăn
+        bấm công tắc vẫn chưa xong, tư thế ban đầu của nó (để cầu mới không hiện ra
+        trước khi khối tiếp đất)."""
         if self.bridge_fx is not None:
             return self.bridge_fx
         if self._queued_bridges is not None:
@@ -860,16 +884,16 @@ class BloxorzApp:
         return None
 
     def present(self, flip=True):
-        """Show the last drawn frame in the window (flip=False: leave the flip to the caller).
+        """Hiển thị frame vừa vẽ lên cửa sổ (flip=False: để bên gọi tự flip).
 
-        A Retina window has 2x the pixels of the logical screen. The UI frame
-        is scaled up to fill it, and the board is drawn on top at the full
-        resolution, so tiles and block are sharp instead of blurred by the OS.
-        While the UI is unchanged only the board's area is refreshed.
+        Cửa sổ Retina có số pixel gấp đôi screen logic. Frame UI được phóng to
+        cho vừa, còn bàn chơi được vẽ đè lên ở độ phân giải đầy đủ, nên ô và khối
+        sắc nét thay vì bị hệ điều hành làm mờ. Khi UI không đổi thì chỉ làm mới
+        vùng của bàn chơi.
 
-        The board is drawn on its own transparent layer: the renderer's glows,
-        trails and particles use translucent colours, which only work on a
-        surface with per-pixel alpha (the window surface has none).
+        Bàn chơi được vẽ trên một lớp trong suốt riêng: các hiệu ứng phát sáng,
+        vệt và hạt của renderer dùng màu bán trong suốt, chỉ đúng trên surface có
+        alpha từng pixel (surface của cửa sổ không có).
         """
         hi = self.window.get_surface()
         if hi.get_size() == self.screen.get_size():
@@ -885,30 +909,27 @@ class BloxorzApp:
             scale = hi.get_width() / self.screen.get_width()
             rect = pygame.Rect(round(self.board_rect.x * scale), round(self.board_rect.y * scale),
                                round(self.board_rect.w * scale), round(self.board_rect.h * scale))
-            if getattr(self, 'trauma', 0.0) > 0.01:  # same camera shake as the 1x path
-                intensity = self.trauma ** 1.5
-                ticks = pygame.time.get_ticks()
-                rect.move_ip(round(math.sin(ticks * 0.048) * 2.5 * intensity * scale),
-                             round(math.cos(ticks * 0.062) * 1.8 * intensity * scale))
+            if self.trauma > 0.01:  # cùng kiểu rung camera như đường vẽ 1x
+                shake_x, shake_y = camera_shake(self.trauma, pygame.time.get_ticks())
+                rect.move_ip(round(shake_x * scale), round(shake_y * scale))
             rect = rect.clamp(hi.get_rect())
             if self._hi_ui_shown is not ui:
                 hi.blit(self._hi_base[1], (0, 0))
                 self._hi_ui_shown = ui
-            else:  # UI unchanged: restore just the board's area (plus the shake margin)
+            else:  # UI không đổi: chỉ khôi phục vùng của bàn chơi (cộng lề rung)
                 area = rect.inflate(round(16 * scale), round(16 * scale)).clip(hi.get_rect())
                 hi.blit(self._hi_base[1], area.topleft, area)
-            self.renderer.zoom, self.renderer.pan = self.zoom, ((self.pan[0] + getattr(self, 'camera_pan_x', 0.0)) * scale, self.pan[1] * scale)
+            self.renderer.zoom, self.renderer.pan = self.zoom, (self.pan[0] * scale, self.pan[1] * scale)
             self.renderer.pixel_scale = scale
             if self._hi_board is None or self._hi_board.get_size() != rect.size:
                 self._hi_board = pygame.Surface(rect.size, pygame.SRCALPHA)
             self._hi_board.fill((0, 0, 0, 0))
-            # clear=False: moving frames are composed straight onto this layer.
+            # clear=False: frame chuyển động được dựng thẳng lên lớp này.
             self.renderer.draw(self._hi_board, self.session.current_state, self.animation.frame,
-                               intro_t=getattr(self, 'intro_t', None), outro_t=self.board_outro(),
-                               shockwave=getattr(self, 'shockwave', None), bridges=self.bridge_view(), clear=False)
+                               clear=False, **board_effects(self))
             hi.blit(self._hi_board, rect)
-            emblem = getattr(self, '_emblem', None)
-            if emblem is not None:  # the bobbing header cube, drawn sharp every frame
+            emblem = self._emblem
+            if emblem is not None:  # khối lập phương nhấp nhô ở header, vẽ sắc nét mỗi frame
                 bx, cy, style = emblem
                 area = pygame.Rect(round((bx - 12) * scale), round((cy - 12) * scale),
                                    round(24 * scale), round(28 * scale)).clip(hi.get_rect())
@@ -930,13 +951,11 @@ class BloxorzApp:
                 if self.menu == 'settings':
                     if self.bgm_slider_rect.inflate(0, 16).collidepoint(event.pos):
                         self.active_slider = 'bgm'
-                        t = max(0.0, min(1.0, (event.pos[0] - self.bgm_slider_rect.x) / max(1, self.bgm_slider_rect.w)))
-                        self.set_bgm_volume(t)
+                        self.set_bgm_volume(_slider_ratio(self.bgm_slider_rect, event.pos[0]))
                         return
                     if self.sfx_slider_rect.inflate(0, 16).collidepoint(event.pos):
                         self.active_slider = 'sfx'
-                        t = max(0.0, min(1.0, (event.pos[0] - self.sfx_slider_rect.x) / max(1, self.sfx_slider_rect.w)))
-                        self.set_sfx_volume(t)
+                        self.set_sfx_volume(_slider_ratio(self.sfx_slider_rect, event.pos[0]))
                         return
                 for button in reversed(self.buttons):
                     if button.enabled and button.rect.collidepoint(event.pos):
@@ -960,34 +979,28 @@ class BloxorzApp:
                 self.dragging = False
         elif event.type == pygame.MOUSEMOTION:
             if self.active_slider == 'bgm':
-                t = max(0.0, min(1.0, (event.pos[0] - self.bgm_slider_rect.x) / max(1, self.bgm_slider_rect.w)))
-                self.set_bgm_volume(t)
+                self.set_bgm_volume(_slider_ratio(self.bgm_slider_rect, event.pos[0]))
             elif self.active_slider == 'sfx':
-                t = max(0.0, min(1.0, (event.pos[0] - self.sfx_slider_rect.x) / max(1, self.sfx_slider_rect.w)))
-                self.set_sfx_volume(t)
+                self.set_sfx_volume(_slider_ratio(self.sfx_slider_rect, event.pos[0]))
             elif self.dragging and not (self.stage_picker or self.menu):
                 self.pan[0] += event.rel[0]
                 self.pan[1] += event.rel[1]
         elif event.type == pygame.MOUSEWHEEL and not (self.stage_picker or self.menu or self.dropdown_open) and self.board_rect.collidepoint(pygame.mouse.get_pos()):
-            self.zoom = max(0.5, min(2.5, self.zoom + event.y * 0.1))
+            self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, self.zoom + event.y * ZOOM_STEP))
 
     def run(self):
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
-        # allow_high_dpi: on Retina screens the window surface gets 2x pixels (see present()).
+        # allow_high_dpi: trên màn Retina surface của cửa sổ có gấp đôi pixel (xem present()).
         self.window = pygame.Window('Bloxorz 3D - Search Lab', self.WINDOW_SIZE, resizable=True, allow_high_dpi=True)
         self.window.minimum_size = theme.MIN_SIZE
         self.screen = pygame.Surface(self.window.size)
         self.hidpi = self.window.get_surface().get_width() / self.window.size[0]
-        self.font = pygame.font.Font(None, 28)
-        self.title_font = pygame.font.Font(None, 38)
         if pygame.mixer.get_init():
             from src.gui.sfx import SoundBank
             self.sound = SoundBank(volume=self.sfx_volume)
-            bgm_path = ROOT / 'assets' / 'bgm' / 'the_mountain-retro-game-593063.mp3'
-            if not bgm_path.exists():
-                bgm_path = ROOT / 'assets' / 'bgm' / 'cheerful_puzzle.wav'
-            if bgm_path.exists():
+            bgm_path = next((path for path in BGM_TRACKS if path.exists()), None)
+            if bgm_path is not None:
                 try:
                     pygame.mixer.music.load(str(bgm_path))
                     pygame.mixer.music.set_volume(self.bgm_volume if self.sound_enabled else 0.0)
@@ -995,7 +1008,7 @@ class BloxorzApp:
                 except Exception:
                     pass
         else:
-            self.sound_enabled = False  # no audio device: Settings should say Off
+            self.sound_enabled = False  # không có thiết bị âm thanh: Settings phải hiện Off
         try:
             rates = pygame.display.get_desktop_refresh_rates()
         except (AttributeError, pygame.error):
@@ -1006,7 +1019,7 @@ class BloxorzApp:
             self.running = True
             while self.running:
                 now = time.perf_counter()
-                dt = min(now - last, 0.1)  # exact elapsed time, not whole milliseconds
+                dt = min(now - last, 0.1)  # thời gian trôi chính xác, không làm tròn mili giây
                 last = now
                 for event in pygame.event.get():
                     if event.type in (pygame.QUIT, pygame.WINDOWCLOSE):
@@ -1021,6 +1034,4 @@ class BloxorzApp:
         finally:
             self.running = False
             self.gateway.close()
-            if hasattr(self.renderer, 'close'):
-                self.renderer.close()
             pygame.quit()

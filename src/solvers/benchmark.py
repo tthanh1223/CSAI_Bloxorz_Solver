@@ -50,19 +50,11 @@ def _make_solver(name: str):
 
 
 def _make_problem(stage_name: str):
-    from src.engine.loader import load_stage
+    from src.engine.loader import initial_state, load_stage
     from src.engine.problem import BloxorzProblem
-    from src.engine.state import GameState, Orientation
 
     stage = load_stage(str(LEVELS_DIR / f"{stage_name}.json"))
-    start = GameState(
-        pos1=stage.start,
-        pos2=stage.start,
-        orientation=Orientation.STANDING,
-        active_cube=0,
-        bridges_status=stage.initial_bridge_mask,
-    )
-    return BloxorzProblem(stage, start)
+    return BloxorzProblem(stage, initial_state(stage))
 
 
 def _worker(stage_name: str, solver_name: str, queue) -> None:

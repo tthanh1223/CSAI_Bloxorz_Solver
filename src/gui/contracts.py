@@ -1,4 +1,4 @@
-"""Stable contracts between the GUI and the search/benchmark layers."""
+"""Các hợp đồng ổn định giữa GUI và lớp search/benchmark."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class SolverMetrics:
 
 @dataclass(frozen=True)
 class SolverResultView:
-    """Presentation shape independent of the P3/P4 solver implementation."""
+    """Dạng dữ liệu để hiển thị, độc lập với cài đặt solver của P3/P4."""
 
     algorithm: str
     found: bool
@@ -72,42 +72,42 @@ class MotionFrame:
     before: GameState
     after: GameState
     action: Action
-    progress: float  # Normalized animation progress in [0, 1].
-    # True: `after` is the illegal pose the block rolls into before dropping
-    # off the board (engine never accepted it). Defaults keep old callers valid.
+    progress: float  # Tiến độ animation đã chuẩn hoá trong [0, 1].
+    # True: `after` là tư thế không hợp lệ mà khối lăn vào trước khi rơi
+    # khỏi bàn (engine không bao giờ chấp nhận). Giá trị mặc định giữ cho code gọi cũ vẫn đúng.
     falling: bool = False
-    # True: the block (standing on the goal, before == after) sinks into the hole.
+    # True: khối (đứng trên ô đích, before == after) chìm vào lỗ.
     sinking: bool = False
 
 
 class SolverGateway(Protocol):
-    """Nonblocking worker adapter. App polls results on the main thread."""
+    """Adapter worker không chặn. App lấy kết quả (poll) trên luồng chính."""
 
     def submit(self, request: SolverRequest) -> None:
-        """Start one job; reject a new job while the worker is busy."""
+        """Bắt đầu một việc; từ chối việc mới khi worker đang bận."""
         ...
 
     def poll(self) -> SolverResponse | None:
-        """Consume one completed response, or return None without waiting."""
+        """Lấy một kết quả đã xong, hoặc trả về None mà không chờ."""
         ...
 
     def cancel(self, request_id: int) -> None:
-        """Request cancellation without blocking; unknown IDs are a no-op."""
+        """Yêu cầu huỷ mà không chặn; ID không biết thì bỏ qua."""
         ...
 
     def close(self) -> None:
-        """Release worker resources when the app exits."""
+        """Giải phóng tài nguyên worker khi app thoát."""
         ...
 
 
 class ReplayController(Protocol):
     status: ReplayStatus
     initial_state: GameState | None
-    index: int  # Number of actions already issued.
+    index: int  # Số action đã phát ra.
     length: int
 
     def load(self, initial_state: GameState, path: Sequence[Action]) -> None:
-        """Copy path; reset index to zero. Empty paths are FINISHED."""
+        """Sao chép đường đi; đặt index về 0. Đường đi rỗng thì là FINISHED."""
         ...
 
     def play(self) -> None:
@@ -117,16 +117,16 @@ class ReplayController(Protocol):
         ...
 
     def step(self) -> Action | None:
-        """Issue one action and advance index; never modify the game session.
+        """Phát một action và tăng index; không bao giờ sửa session của game.
 
-        Allowed in READY, PLAYING or PAUSED; preserve playback mode until
-        the final action is issued, then mark FINISHED. Otherwise return None.
-        App calls only when animation is idle and owns playback timing.
+        Được phép ở READY, PLAYING hoặc PAUSED; giữ nguyên chế độ phát cho tới
+        khi phát action cuối, rồi đánh dấu FINISHED. Các trường hợp khác trả về None.
+        App chỉ gọi khi animation rảnh và tự quản lý nhịp phát.
         """
         ...
 
     def reset(self) -> None:
-        """Clear path and initial state, reset index, and become EMPTY."""
+        """Xoá đường đi và state ban đầu, đặt lại index, và chuyển sang EMPTY."""
         ...
 
 
@@ -135,7 +135,7 @@ class BoardRenderer(Protocol):
         ...
 
     def resize(self, size: tuple[int, int]) -> None:
-        """Fit camera to the board surface size in pixels."""
+        """Căn camera theo kích thước surface của bàn chơi (pixel)."""
         ...
 
     def draw(
@@ -143,8 +143,11 @@ class BoardRenderer(Protocol):
         motion: MotionFrame | None = None,
         intro_t: float | None = None,
         outro_t: float | None = None,
+        shockwave: tuple[float, float, float] | None = None,
+        bridges: tuple[tuple[bool, ...], tuple[bool, ...], float] | None = None,
+        clear: bool = True,
     ) -> None:
-        """Draw only on the dedicated board surface; never mutate state."""
+        """Chỉ vẽ lên surface riêng của bàn chơi; không bao giờ sửa state."""
         ...
 
 
@@ -152,14 +155,15 @@ class AnimationController(Protocol):
     busy: bool
     frame: MotionFrame | None
 
-    def start(self, before: GameState, after: GameState, action: Action) -> None:
-        """Start an engine-accepted transition while idle."""
+    def start(self, before: GameState, after: GameState, action: Action,
+              falling: bool = False, sinking: bool = False) -> None:
+        """Bắt đầu một chuyển trạng thái đã được engine chấp nhận, khi đang rảnh."""
         ...
 
     def update(self, dt: float) -> None:
-        """Advance by seconds; on completion set busy=False and frame=None."""
+        """Tiến thêm dt giây; khi xong đặt busy=False và frame=None."""
         ...
 
     def reset(self) -> None:
-        """Immediately clear frame and busy state."""
+        """Xoá ngay frame và trạng thái bận."""
         ...

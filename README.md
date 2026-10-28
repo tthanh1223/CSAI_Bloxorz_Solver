@@ -25,7 +25,7 @@ python -m pip install -r requirements.txt
 ## Run
 
 ```powershell
-python main_test.py
+python main.py
 ```
 
 The GUI dependency is `pygame-ce`; it provides the `pygame` import used by the
@@ -45,7 +45,8 @@ from the engine and solver packages.
 - Save/load, animation, sound, contrast, text size and reset camera are in Settings.
   Audio is optional; it is disabled when no audio device is available.
 - Help contains controls and tile symbols. Result details expands solver metrics.
-- Escape: close the current menu, or quit the application.
+- Escape: close the current menu or the solver panel; otherwise open/close the main menu.
+  Tab: show/hide the solver panel.
 
 - V (or Settings > View): switch between the **original view** (default: the
   Flash game's front-left perspective camera; Up moves away from you, Left/Right
@@ -65,10 +66,26 @@ detected by `BloxorzProblem.fall_result()` / `GameSession.fall()`; solvers still
 only use `get_successors()`, so falling never appears in a solution. IDS is the
 existing implementation named `DFS` internally.
 
+## Tests
+
+Run from the repository root with the virtual environment activated:
+
+```powershell
+python -m pytest -q                                  # all tests (~25 s)
+python -m pytest -q --ignore=tests/test_gui.py       # engine and solvers only (~1 s)
+python -m pytest -q tests/test_roll_block.py         # one file
+```
+
+- `test_state`, `test_roll_block`, `test_validate`, `test_switches`, `test_problem`:
+  game state, rolling/splitting, valid moves, switches, falls.
+- `test_solvers`: BFS, IDS, UCS and A* find correct solutions and stop on unsolvable stages.
+- `test_gui`: rendering, caches, replay, save/load and the real solver worker.
+
 ## Editing the GUI
 
 - `src/gui/renderer3d.py`: geometry, colors, projection, tile symbols, camera.
-- `src/gui/theme.py`: shared colors, spacing, font family and three type sizes.
+- `src/gui/theme.py`: shared colors, layout sizes and fonts.
+- `src/gui/themes.py`: Dream City / Blueprint / Forest palettes and theme switching.
 - `src/gui/ui.py`: reusable buttons with hover/pressed/disabled/selected states.
 - `src/gui/presentation.py`: state-dependent layout, solver panel and menus.
 - `src/gui/app.py`: input and game/solver/replay integration.
@@ -77,41 +94,40 @@ existing implementation named `DFS` internally.
 - `src/gui/solver_gateway.py`: background processes, timeout and cancellation.
 - `src/gui/contracts.py`: shared interfaces; coordinate changes across modules.
 
-Run `python main_test.py` after editing. All current live-window screenshots are
-in `docs/screenshots/`; regenerate all three themes and their interactive states
-with `python scripts/capture_themes.py` (opens a desktop window and runs the real solver).
-Run `python -m pytest -q -p no:cacheprovider` for engine,
-GUI integration, geometry, replay, save/load and real solver-worker checks.
+Run `python main.py` and the tests after editing.
+
+## Benchmark
+
+```powershell
+python -m src.solvers.benchmark                  # all test stages, 60 s limit per run
+python -m src.solvers.benchmark --time-limit 30
+python -m src.solvers.benchmark --plot-only      # redraw charts from the CSV
+```
+
+Results go to `data/benchmark_results.csv` and `data/chart_*.png`; see
+[benchmark notes](docs/benchmark.md).
 
 ## Project layout
 
 - `levels/`: JSON stage definitions shared by the game and solvers.
 - `data/`: generated benchmark CSV files and comparison charts.
+- `assets/`: backgrounds, fonts, music and sound effects used by the GUI.
+- `docs/`: benchmark notes and UML diagrams (`docs/uml/`).
 - `src/engine/`: state, stage loading, transitions, and tile mechanics.
 - `src/solvers/`: search algorithms, profiling, and benchmark runner.
 - `src/gui/`: Pygame application.
 - `tests/`: automated checks for engine, stages, solvers, and integration.
 
-## Themes and screenshots
+## Themes
 
-Dream City is the default. Click the theme name beside the logo to cycle themes,
-or launch one directly:
+Dream City is the default. Click the theme name beside the logo (or press T in
+the main menu) to cycle through Dream City, Forest Ruins and Paper Blueprint.
 
-```
-python main_test.py --theme blueprint
-python main_test.py --theme forest
-```
+All themes use the same Pygame renderer and need no extra dependencies. Static
+board/material layers and UI are cached. No gameplay or solver algorithm is
+reimplemented by the themes. The chosen theme is not saved between sessions yet.
 
-Windows shortcuts: `run_blueprint.cmd`, `run_forest.cmd`. These use the optimized
-Pygame renderer and require no extra dependencies. Dream/Blueprint have champagne
-brass blocks with charcoal contours; Forest uses a weathered gold texture. Static
-board/material/shadow layers and UI are cached. No gameplay or solver algorithm is
-reimplemented by the themes.
+## Credits
 
-The older experimental OpenGL scene remains optional: install
-`requirements-forest.txt`, then run `python main_test.py --forest`. It is separate
-from `--theme forest` and is not the recommended renderer.
-
-See [GUI handoff](docs/GUI_HANDOFF.md), [verification report](docs/GUI_REPORT.md),
-and [screenshot index](docs/screenshots/README.md). Sound is currently an optional
-movement beep; dedicated SFX/music and saved theme preferences remain unfinished.
+Background images, fonts, music and sound effects are listed with their sources
+and licenses in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md).
